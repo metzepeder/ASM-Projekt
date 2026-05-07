@@ -91,6 +91,16 @@ MAIN:
     SETB ET0
     SETB EA
 
+    ; --- START-BLINK: LED kurz aufleuchten als Bereitschaftssignal ---
+    CLR  LED            ; LED an (aktiv LOW)
+    MOV  R6, #0FFH     ; \
+    BLINK_WAIT:         ;  > kurze Verzoegerung (~50ms bei 12MHz)
+    MOV  R7, #0FFH     ;  |
+    BW_INNER:           ;  |
+    DJNZ R7, BW_INNER  ;  |
+    DJNZ R6, BLINK_WAIT ; /
+    SETB LED            ; LED aus
+
 LOOP:
     MOV A, STATE
     CJNE A, #ST_WAIT,    CHECK_SHOW
