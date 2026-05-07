@@ -35,10 +35,10 @@ ST_WAIT     EQU 00H     ; Warten / Zufallsverzoegerung
 ST_MEASURE  EQU 01H     ; LED an, Zeit wird gemessen
 ST_SHOW     EQU 02H     ; Ergebnis anzeigen
 
-; --- Bit-Aliases ---
-LED         EQU P1.0
-BUZZER      EQU P1.7
-BUTTON      EQU P3.2
+
+LED     EQU P1.0    ; Port 1, Bit 0
+BUZZER  EQU P1.7    ; Port 1, Bit 7
+BUTTON  EQU P3.2    ; Port 3, Bit 2 (INT0)
 
 ; --- Timer-0 Reload fuer 1 ms bei 12 MHz ---
 ; 65536 - 1000 = 64536 = FC18H
