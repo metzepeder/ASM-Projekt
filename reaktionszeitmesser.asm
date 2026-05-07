@@ -11,7 +11,7 @@
 ;   P1.7 = Buzzer (aktiv LOW)
 ;
 ; Ablauf:
-;   1. Zufaellige Wartezeit (0.5 - 1.8 s, LFSR-RNG)
+;   1. Zufaellige Wartezeit (1 - 15 s, LFSR-RNG)
 ;   2. LED leuchtet auf
 ;   3. Spieler drueckt Taster
 ;   4. Reaktionszeit wird in ms auf Display angezeigt
@@ -177,8 +177,15 @@ ISR_T0_END:
     RETI
 
 ;==============================================================
-; RANDOM_WAIT: Zufaellige Wartezeit ~0.5 - 1.8 s
-; Nutzt LFSR-Zustand als Wartelaengen-Quelle.
+; RANDOM_WAIT: Zufaellige Wartezeit ~1 - 15 s (max. 15 s)
+;
+; Struktur: R2 Bloecke, je Block R5*R4 Iterationen
+;   R2  = 1-15  (unteres Nibble RAND_SEED nach Warmup)
+;   R5  = 255   (aeussere Iterationen pro Block)
+;   R4  = 255   (innere Iterationen)
+;   Pro innere Iteration: LCALL LFSR_STEP + DJNZ ~ 15 us
+;   Pro Block: 255 * 255 * 15 us ~ 975 ms ~ 1 s
+;   Gesamt:     1 * 975 ms .. 15 * 975 ms  ~  1 - 15 s
 ;==============================================================
 RANDOM_WAIT:
     MOV  P2, #00H
@@ -191,19 +198,23 @@ RW_WARMUP:
     LCALL LFSR_STEP
     DJNZ R6, RW_WARMUP
 
-    ; Warteiterationen: 50 + (RAND_SEED & 0x7F)  -> 50..177
-    ; Jede Iteration ~ 10 ms  ->  0.5..1.8 s Gesamtwartezeit
+    ; Anzahl Sekunden-Bloecke: 1-15 aus unterem Nibble RAND_SEED
     MOV  A, RAND_SEED
-    ANL  A, #7FH
-    ADD  A, #32H
-    MOV  R5, A
+    ANL  A, #0FH            ; 0-15
+    JNZ  RW_CNT_OK
+    INC  A                  ; 0 -> 1 (Sicherheit, LFSR liefert nie 0)
+RW_CNT_OK:
+    MOV  R2, A              ; 1-15 Bloecke
 
+RW_BLOCKS:
+    MOV  R5, #0FFH
 RW_OUTER:
     MOV  R4, #0FFH
 RW_INNER:
     LCALL LFSR_STEP
     DJNZ R4, RW_INNER
     DJNZ R5, RW_OUTER
+    DJNZ R2, RW_BLOCKS
     RET
 
 ;==============================================================
