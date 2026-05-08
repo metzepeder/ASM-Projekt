@@ -35,10 +35,10 @@ ST_WAIT     EQU 00H     ; Warten / Zufallsverzoegerung
 ST_MEASURE  EQU 01H     ; LED an, Zeit wird gemessen
 ST_SHOW     EQU 02H     ; Ergebnis anzeigen
 
-; --- Bit-Aliases ---
-LED         EQU P1.0
-BUZZER      EQU P1.7
-BUTTON      EQU P3.2
+
+LED     EQU P1.0    ; Port 1, Bit 0
+BUZZER  EQU P1.7    ; Port 1, Bit 7
+BUTTON  EQU P3.2    ; Port 3, Bit 2 (INT0)
 
 ; --- Timer-0 Reload fuer 1 ms bei 12 MHz ---
 ; 65536 - 1000 = 64536 = FC18H
@@ -90,6 +90,16 @@ MAIN:
     SETB EX0
     SETB ET0
     SETB EA
+
+    ; --- START-BLINK: LED kurz aufleuchten als Bereitschaftssignal ---
+    CLR  LED            ; LED an (aktiv LOW)
+    MOV  R6, #0FFH     ; \
+    BLINK_WAIT:         ;  > kurze Verzoegerung (~50ms bei 12MHz)
+    MOV  R7, #0FFH     ;  |
+    BW_INNER:           ;  |
+    DJNZ R7, BW_INNER  ;  |
+    DJNZ R6, BLINK_WAIT ; /
+    SETB LED            ; LED aus
 
 LOOP:
     MOV A, STATE
