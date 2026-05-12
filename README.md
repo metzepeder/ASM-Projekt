@@ -30,15 +30,3 @@ An 8051 assembly program that measures human reaction time. The system lights an
 4. Timer 0 counts milliseconds until the button is pressed.
 5. The reaction time is displayed on the 7-segment display.
 6. If the button is pressed before the LED (false start), the buzzer sounds and the round restarts.
-
-## Memory Map (Internal RAM)
-
-| Address | Purpose              |
-| ------- | -------------------- |
-| 30H     | Reaction time (high) |
-| 31H     | Reaction time (low)  |
-| 32H     | Random seed (LFSR)   |
-| 33H     | Hundreds digit       |
-| 34H     | Tens digit           |
-| 35H     | Ones digit           |
-| 36H     | State machine        |
