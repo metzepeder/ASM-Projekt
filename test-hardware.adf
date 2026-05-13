@@ -1,0 +1,9 @@
+# Assembler debug file for MCU 8051 IDE v1.4.9
+# Used assembler: MCU 8051 IDE
+# Date: 05/13/2026
+4506580A9F826E8AED98A332D1E085DD "test-hardware.asm" 
+0 4 0 121 100
+0 5 2 210 128
+0 8 4 217 254
+0 10 6 194 128
+0 13 8 128 254
