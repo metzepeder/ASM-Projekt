@@ -8,14 +8,13 @@
 ;   P0.0 = Digit-Select Stelle 1 (Hunderter ms)
 ;   P0.1 = Digit-Select Stelle 2 (Zehner ms)
 ;   P0.2 = Digit-Select Stelle 3 (Einer ms)
-;   P1.7 = Buzzer (aktiv LOW)
 ;
 ; Ablauf:
 ;   1. Zufaellige Wartezeit (1 - 15 s, LFSR-RNG)
 ;   2. LED leuchtet auf
 ;   3. Spieler drueckt Taster
 ;   4. Reaktionszeit wird in ms auf Display angezeigt
-;   5. Bei False Start (zu frueh): Buzzer + Neustart
+;   5. Bei False Start (zu frueh): Neustart
 ;
 ; Takt: 12 MHz  ->  1 Maschinenzyklus = 1 us
 ;       Timer-0 Mode 1 (16-bit), Reload fuer 1 ms: 64536 = FC18H
@@ -37,7 +36,6 @@ ST_SHOW     EQU 02H     ; Ergebnis anzeigen
 
 
 LED     EQU P1.0    ; Port 1, Bit 0
-BUZZER  EQU P1.7    ; Port 1, Bit 7
 BUTTON  EQU P3.2    ; Port 3, Bit 2 (INT0)
 
 ; --- Timer-0 Reload fuer 1 ms bei 12 MHz ---
@@ -69,7 +67,7 @@ REACT_MAX_L EQU 0E7H
 MAIN:
     MOV SP, #60H
 
-    ; Ports: LED + Buzzer aus (aktiv LOW -> Ausgang HIGH)
+    ; Ports: LED aus (aktiv LOW -> Ausgang HIGH)
     MOV P1, #0FFH
     MOV P2, #00H
     MOV P0, #00H
@@ -138,14 +136,9 @@ ISR_BUTTON:
     RETI
 
 FALSE_START:
-    ; Zu frueh gedrueckt: Buzzer kurz an, Reset
+    ; Zu frueh gedrueckt: Reset
     CLR  TR0
     SETB LED                ; LED sicherheitshalber aus
-    CLR  BUZZER             ; Buzzer an (aktiv LOW)
-    MOV  R7, #0FFH
-BUZZ_WAIT:
-    DJNZ R7, BUZZ_WAIT
-    SETB BUZZER             ; Buzzer aus
     MOV  STATE, #ST_WAIT
     POP  ACC
     RETI
