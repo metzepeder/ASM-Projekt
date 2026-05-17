@@ -1,200 +1,200 @@
 reaction-game-poc                                                                                                       PAGE 1
                          1     ;-------------------------------------------------
-                         2     ;Countdown / Zaehlt auf Null
-                         3     ;in Minuten und Sekunden
+                         2     ; Reaction Game
+                         3     ; Automatischer Start → LED an → Reaktionszeit messen
                          4     ;
-                         5     ; mit 4x7-segment anzeige
-                         6     ;
-                         7     ; P2.0 =  1er Sekunden => P3=R2
-                         8     ; P2.1 = 10er Sekunden => P3=R3
-                         9     ; P2.2 =  1er Minuten  => P3=R4
-                        10     ; P2.3 = 10er Minuten  => P3=R5
-                        11     ;
-                        12     ; Hauptprogrammschleife
+                         5     ; P2.0 = 1er Hundertstel  => R2
+                         6     ; P2.1 = 10er Hundertstel => R3
+                         7     ; P2.2 = 1er Sekunden     => R4
+                         8     ; P2.3 = 10er Sekunden    => R5
+                         9     ;
+                        10     ; Reaktion = P1.1
+                        11     ; Reset    = P1.2
+                        12     ; LED      = P0.0
                         13     ;
-                        14     ; Start = P1.0
-                        15     ; Stop  = P1.1
-                        16     ; Reset = P1.2
-                        17     ; -------------------------------------------------
+                        14     ; State (30h): 01=WAITING, 02=ACTIVE, 03=RESULT
+                        15     ; RandDelay (31h): Verzögerungs-Zähler
+                        16     ; RandSeed  (32h): Freier Zähler als Zufallsquelle
+                        17     ;-------------------------------------------------
                         18     cseg at 0h
 0000 0120               19     ajmp init
                         20     cseg at 100h
                         21
-                        22     ; ------------------------------------------------
+                        22     ;-------------------------------------------------
                         23     ; Interrupt für TIMER0: Einsprung bei 0Bh
                         24     ;-------------------------------------------------
                         25     ORG 0Bh
 ****WARNING:ThisORGhaslowervaluethanthepreviousone
-000B 120061             26     call timer
+000B 12005E             26     call timer
 000E 32                 27     reti
-                        28     ;-------------------------------------------------------
-                        29     ;init: TIMER wird initialisiert
-                        30     ; für 40 ms benötigt man einen 16 bit Timer
-                        31     ; das dauert zu lange in der Simulation!
-                        32     ; Daher hier eine kurze Variante!
-                        33     ; Es wird nur von C0h auf FFh hochgezählt und
-                        34     ; dann der Timer wird auf C0h gesetzt
-                        35     ; (für Hardware müsste das ersetzt werden!)
-                        36     ;-------------------------------------------------------
-                        37     ORG 20h
-                        38     init:
-0020 75A892             39     mov IE, #10010010b
-0023 758902             40     mov tmod, #00000010b
-0026 7F00               41     mov r7, #00h ; Minuten
-0028 7E00               42     mov r6, #00h ; Sekunden
-002A 758AC0             43     mov tl0, #0c0h  ; Timer-Initionalsierung
-002D 758CC0             44     mov th0, #0c0h
-0030 759000             45     mov P1,#00h
-0033 D280               46     setb P0.0 ; Merker für RESET
-                        47     ;-----------------------------------------------------------------------
-                        48     ; die Voreingestellten Minuten und Sekunden erscheinen auf dem Display
-                        49     ;-----------------------------------------------------------------------
-0035 120086             50     call zeigen
-                        51     ;---------------------------
+                        28
+                        29     ORG 20h
+                        30     init:
+0020 75A892             31         mov IE, #10010010b    ; Global + Timer0 Interrupt
+0023 758902             32         mov tmod, #00000010b  ; Timer0 Mode 2 (8-bit auto-reload)
+0026 758AC0             33         mov tl0, #0c0h
+0029 758CC0             34         mov th0, #0c0h
+002C 7900               35         mov r1, #00h          ; ISR Tick-Zähler
+002E 7E00               36         mov r6, #00h          ; Reaktionszeit: Hundertstel
+0030 7F00               37         mov r7, #00h          ; Reaktionszeit: Sekunden
+                        38         ; 32h wird nicht zurückgesetzt (Zufallsquelle läuft durch)
+0032 C280               39         clr P0.0              ; LED aus
+0034 D28C               40         setb tr0              ; Timer dauerhaft starten
+                        41         ; Zufälligen Delay berechnen und direkt WAITING starten
+0036 E532               42         mov a, 32h
+0038 543F               43         anl a, #3Fh           ; Maske 0-63
+003A 2414               44         add a, #14h           ; Minimum 20 → Bereich: 20-83 Ticks
+003C F531               45         mov 31h, a
+003E 753001             46         mov 30h, #01h         ; State = WAITING
+0041 1200A5             47         call zeigen
+                        48
+                        49     ;-------------------------------------------------
+                        50     ; Hauptschleife
+                        51     ;-------------------------------------------------
                         52     anfang:
-0038 309013             53     jnb p1.0, starttimer
-003B 309116             54     jnb p1.1, stoptimer
-                        55     nurRT:
-003E 309219             56     jnb p1.2, RT
-0041 308C02             57     jnb tr0, da
-0044 0138               58     ajmp anfang
-                        59     da:
-****WARNING:Reservedkeywordusedaslabel
-0046 1200A7             60     call display
-0049 3080F2             61     jnb P0.0, nurRT
-004C 0138               62     ajmp anfang
-                        63     ;------------------------------
-                        64     ; Hauptprogrammschleife
-                        65     ;
-                        66     ; Start = P1.0
-                        67     ; Stop  = P1.1
-                        68     ; Reset = P1.2
-                        69     ;------------------------------
-                        70     starttimer:
-004E D28C               71     setb tr0; start timer0
-0050 D290               72     setb P1.0
-0052 0138               73     ajmp anfang
-                        74     ; stop Timer
-                        75     stoptimer:
-0054 C28C               76     clr tr0; stop timer
-0056 D291               77     setb P1.1
-0058 0138               78     ajmp anfang
-                        79     ; reset Timer
-                        80     RT:
-005A C28C               81     clr tr0; stop timer
-005C D292               82     setb P1.2
-005E 020020             83     ljmp init
-                        84     ;---------------------------------------------
-                        85     ; timer
-                        86     ; Zählt 1 Sekunde: 25 mal 40 Millisekunden
-                        87     ; 24mal wird nur die Anzeige "refresht"
-                        88     ; beim 25mal wird die Zeit runter gezählt
-                        89     ;(hier: nur 2mal und nur wenige my Sekunden)
-                        90     ;---------------------------------------------
-                        91     timer:
-0061 09                 92     inc r1
-0062 B90206             93     cjne r1, #02h, nuranzeige
-0065 7900               94     mov r1, #00h
-0067 12006F             95     call countup
-006A 22                 96     ret
-                        97
-                        98     nuranzeige:
-006B 1200A7             99     call display
-006E 22                100     ret
+0044 309214             53         jnb p1.2, do_reset        ; P1.2: Reset + Neustart (jederzeit)
+0047 E530               54         mov a, 30h
+0049 B402F8             55         cjne a, #02h, anfang      ; nur in ACTIVE auf Reaktionstaste prüfen
+004C 309102             56         jnb p1.1, do_react        ; ACTIVE: Reaktionstaste (P1.1)
+004F 0144               57         ajmp anfang
+                        58
+                        59     do_react:
+0051 753003             60         mov 30h, #03h             ; State = RESULT
+0054 C280               61         clr P0.0                  ; LED aus
+0056 1200A5             62         call zeigen
+0059 0144               63         ajmp anfang
+                        64
+                        65     do_reset:
+005B 020020             66         ljmp init                 ; Reset + Neustart
+                        67
+                        68     ;-------------------------------------------------
+                        69     ; Timer ISR
+                        70     ;-------------------------------------------------
+                        71     timer:
+005E 0532               72         inc 32h                   ; Zufalls-Seed läuft immer
+0060 09                 73         inc r1
+0061 B90206             74         cjne r1, #02h, nuranzeige
+0064 7900               75         mov r1, #00h
+0066 12006E             76         call gamelogic
+0069 22                 77         ret
+                        78
+                        79     nuranzeige:
+006A 1200C6             80         call display
+006D 22                 81         ret
+                        82
+                        83     ;-------------------------------------------------
+                        84     ; Spiellogik (je Tick aus der ISR)
+                        85     ;-------------------------------------------------
+                        86     gamelogic:
+006E E530               87         mov a, 30h
+0070 B40110             88         cjne a, #01h, check_gl_active
+                        89
+                        90         ; WAITING: Delay herunterzählen bis LED angeht
+0073 D53114             91         djnz 31h, gl_ret
+0076 D280               92         setb P0.0                 ; LED an
+0078 753002             93         mov 30h, #02h             ; State = ACTIVE
+007B 7E00               94         mov r6, #00h
+007D 7F00               95         mov r7, #00h
+007F 1200A5             96         call zeigen
+0082 22                 97         ret
+                        98
+                        99     check_gl_active:
+0083 B40204            100         cjne a, #02h, gl_ret
                        101
-                       102     countup:
-006F 0E                103     inc r6
-0070 BE3C0F            104     cjne r6, #3ch, sekunden
-0073 7E00              105     mov r6, #00h
-0075 0F                106     inc r7
-0076 BF6305            107     cjne r7, #63h, minuten
-                       108     hupe:
-0079 C28C              109     clr tr0; stop timer
-007B C280              110     clr P0.0
-007D 22                111     ret
-                       112
-                       113     minuten:
-                       114     ; mov r6, #3bh
-                       115     ; dec r7
-007E 120086            116     call zeigen
-0081 22                117     ret
-                       118     sekunden:
-                       119     ; inc r6
-0082 120086            120     call zeigen
-0085 22                121     ret
-                       122     ;-------------------------------------------------------
-                       123     ; Anzeigewerte: holt die Anzeigewerte aus der Datenbank
-                       124     ; - erst wird aus dem Hex_Wert ein Dezimalwert : BCD-Umrechnung
-                       125     ; dann wird der Wert mit @A+DPTR aus der Datenbank
-                       126     ; in die Register geschrieben
-                       127     ; 1er Sekunden => P3=R2
-                       128     ; 10er Sekunden => P3=R3
-                       129     ; 1er Minuten  => P3=R4
-                       130     ; 10er Minuten  => P3=R5
-                       131     ;-------------------------------------------------------
-                       132     zeigen:
-0086 900300            133     mov DPTR, #table
-0089 EE                134     mov a, R6
-008A 75F00A            135     mov b, #0ah
-008D 84                136     div ab
-008E F8                137     mov R0, a
-008F 93                138     movc a,@a+dptr
-0090 FB                139     mov r3, a
-0091 E8                140     mov a, r0
-0092 C5F0              141     xch a,b
-0094 93                142     movc a, @a+dptr
-0095 FA                143     mov r2, a
-                       144     ;----------------
-0096 EF                145     mov a, R7
-0097 75F00A            146     mov b, #0ah
-009A 84                147     div ab
-009B F8                148     mov R0, a
-009C 93                149     movc a,@a+dptr
-009D FD                150     mov r5, a
-009E E8                151     mov a, r0
-009F C5F0              152     xch a,b
-00A1 93                153     movc a, @a+dptr
-00A2 FC                154     mov r4, a
-00A3 1200A7            155     call display
-00A6 22                156     ret
-                       157     ;-----------------------------------------------
-                       158     ;   DISPLAY: steuert die 4x7 Segmentanzeige
-                       159     ;-----------------------------------------------
-                       160     display:
-00A7 8AB0              161     mov P3, R2
-00A9 C2A0              162     clr P2.0
-00AB D2A0              163     setb P2.0
-                       164
-00AD 8BB0              165     mov P3, R3
-00AF C2A1              166     clr P2.1
-00B1 D2A1              167     setb P2.1
-                       168
-00B3 8CB0              169     mov P3, R4
-00B5 C2A2              170     clr P2.2
-00B7 D2A2              171     setb P2.2
-                       172
-00B9 8DB0              173     mov P3, R5
-00BB C2A3              174     clr P2.3
-00BD D2A3              175     setb P2.3
-                       176
-00BF 22                177     ret
-                       178     ;-------------------------------------------------
-                       179     ; TABLE: Datenbank der 7-Segment-Darstellung
+                       102         ; ACTIVE: Reaktionszeit hochzählen
+0086 12008E            103         call countup
+0089 22                104         ret
+                       105
+                       106     gl_ret:
+008A 1200A5            107         call zeigen
+008D 22                108         ret
+                       109
+                       110     ;-------------------------------------------------
+                       111     ; Reaktionszeit in Hundertstel-Sekunden hochzählen
+                       112     ; Maximum: 9.99 Sekunden → Timeout
+                       113     ;-------------------------------------------------
+                       114     countup:
+008E 0E                115         inc r6
+008F BE640F            116         cjne r6, #64h, zeigen_ret ; noch keine 100 Hundertstel
+0092 7E00              117         mov r6, #00h
+0094 0F                118         inc r7
+0095 BF0A09            119         cjne r7, #0Ah, zeigen_ret ; noch keine 10 Sekunden
+                       120         ; Timeout: zu langsam → fixiere Anzeige auf 9.99
+0098 7F09              121         mov r7, #09h
+009A 7E63              122         mov r6, #63h
+009C 753003            123         mov 30h, #03h             ; State = RESULT
+009F C280              124         clr P0.0                  ; LED aus
+                       125
+                       126     zeigen_ret:
+00A1 1200A5            127         call zeigen
+00A4 22                128         ret
+                       129
+                       130     ;-------------------------------------------------
+                       131     ; zeigen: BCD-Wandlung und Segment-Lookup
+                       132     ;-------------------------------------------------
+                       133     zeigen:
+00A5 900300            134         mov DPTR, #table
+00A8 EE                135         mov a, R6
+00A9 75F00A            136         mov b, #0ah
+00AC 84                137         div ab
+00AD F8                138         mov R0, a
+00AE 93                139         movc a,@a+dptr
+00AF FB                140         mov r3, a
+00B0 E8                141         mov a, r0
+00B1 C5F0              142         xch a,b
+00B3 93                143         movc a, @a+dptr
+00B4 FA                144         mov r2, a
+00B5 EF                145         mov a, R7
+00B6 75F00A            146         mov b, #0ah
+00B9 84                147         div ab
+00BA F8                148         mov R0, a
+00BB 93                149         movc a,@a+dptr
+00BC FD                150         mov r5, a
+00BD E8                151         mov a, r0
+00BE C5F0              152         xch a,b
+00C0 93                153         movc a, @a+dptr
+00C1 FC                154         mov r4, a
+00C2 1200C6            155         call display
+00C5 22                156         ret
+                       157
+                       158     ;-------------------------------------------------
+                       159     ; display: Multiplext 4-stellige 7-Segment-Anzeige
+                       160     ;-------------------------------------------------
+                       161     display:
+00C6 8AB0              162         mov P3, R2
+00C8 C2A0              163         clr P2.0
+00CA D2A0              164         setb P2.0
+                       165
+00CC 8BB0              166         mov P3, R3
+00CE C2A1              167         clr P2.1
+00D0 D2A1              168         setb P2.1
+                       169
+00D2 8CB0              170         mov P3, R4
+00D4 C2A2              171         clr P2.2
+00D6 D2A2              172         setb P2.2
+                       173
+00D8 8DB0              174         mov P3, R5
+00DA C2A3              175         clr P2.3
+00DC D2A3              176         setb P2.3
+                       177
+00DE 22                178         ret
+                       179
                        180     ;-------------------------------------------------
-                       181     org 300h
-                       182     table:
-0300 C0                183     db 11000000b
-0301 F9A4B0            184     db 11111001b, 10100100b, 10110000b
-0304 999282            185     db 10011001b, 10010010b, 10000010b
-0307 F88090            186     db 11111000b, 10000000b, 10010000b
-                       187
-                       188     end
-ASSEMBLY COMPLETE, NO ERRORS FOUND, 2 WARNINGS
+                       181     ; TABLE: 7-Segment-Kodierung für 0-9
+                       182     ;-------------------------------------------------
+                       183     org 300h
+                       184     table:
+0300 C0                185     db 11000000b
+0301 F9A4B0            186     db 11111001b, 10100100b, 10110000b
+0304 999282            187     db 10011001b, 10010010b, 10000010b
+0307 F88090            188     db 11111000b, 10000000b, 10010000b
+                       189
+                       190     end
+ASSEMBLY COMPLETE, NO ERRORS FOUND, 1 WARNING
 
 
 ERROR SUMMARY:
 Line 25, WARNING:ThisORGhaslowervaluethanthepreviousone
-Line 60, WARNING:Reservedkeywordusedaslabel
 
 SYMBOL TABLE:
 ??MCU_8051_IDE . . . . . . . . . . .  N  NUMB  8051H  NOT USED
@@ -207,7 +207,7 @@ ADCLK. . . . . . . . . . . . . . . .  D  ADDR  00F2H  NOT USED
 ADCON. . . . . . . . . . . . . . . .  D  ADDR  00F3H  NOT USED
 ADDH . . . . . . . . . . . . . . . .  D  ADDR  00F5H  NOT USED
 ADDL . . . . . . . . . . . . . . . .  D  ADDR  00F4H  NOT USED
-ANFANG . . . . . . . . . . . . . . .  C  ADDR  0038H
+ANFANG . . . . . . . . . . . . . . .  C  ADDR  0044H
 AUXR . . . . . . . . . . . . . . . .  D  ADDR  008EH  NOT USED
 AUXR1. . . . . . . . . . . . . . . .  D  ADDR  00A2H  NOT USED
 B. . . . . . . . . . . . . . . . . .  D  ADDR  00F0H
@@ -240,6 +240,7 @@ CCF4 . . . . . . . . . . . . . . . .  B  ADDR  00DCH  NOT USED
 CCON . . . . . . . . . . . . . . . .  D  ADDR  00D8H  NOT USED
 CFINT. . . . . . . . . . . . . . . .  C  ADDR  0033H  NOT USED
 CH . . . . . . . . . . . . . . . . .  D  ADDR  00F9H  NOT USED
+CHECK_GL_ACTIVE. . . . . . . . . . .  C  ADDR  0083H
 CKCON. . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
 CKCON0 . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
 CKRL . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
@@ -247,13 +248,14 @@ CKSEL. . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
 CL . . . . . . . . . . . . . . . . .  D  ADDR  00E9H  NOT USED
 CLKREG . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
 CMOD . . . . . . . . . . . . . . . .  D  ADDR  00D9H  NOT USED
-COUNTUP. . . . . . . . . . . . . . .  C  ADDR  006FH
+COUNTUP. . . . . . . . . . . . . . .  C  ADDR  008EH
 CPRL2. . . . . . . . . . . . . . . .  B  ADDR  00C8H  NOT USED
 CR . . . . . . . . . . . . . . . . .  B  ADDR  00DEH  NOT USED
 CT2. . . . . . . . . . . . . . . . .  B  ADDR  00C9H  NOT USED
 CY . . . . . . . . . . . . . . . . .  B  ADDR  00D7H  NOT USED
-DA . . . . . . . . . . . . . . . . .  C  ADDR  0046H
-DISPLAY. . . . . . . . . . . . . . .  C  ADDR  00A7H
+DISPLAY. . . . . . . . . . . . . . .  C  ADDR  00C6H
+DO_REACT . . . . . . . . . . . . . .  C  ADDR  0051H
+DO_RESET . . . . . . . . . . . . . .  C  ADDR  005BH
 DP0H . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
 DP0L . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
 DP1H . . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
@@ -275,7 +277,8 @@ EXTI0. . . . . . . . . . . . . . . .  C  ADDR  0003H  NOT USED
 EXTI1. . . . . . . . . . . . . . . .  C  ADDR  0013H  NOT USED
 F0 . . . . . . . . . . . . . . . . .  B  ADDR  00D5H  NOT USED
 FE . . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
-HUPE . . . . . . . . . . . . . . . .  C  ADDR  0079H  NOT USED
+GAMELOGIC. . . . . . . . . . . . . .  C  ADDR  006EH
+GL_RET . . . . . . . . . . . . . . .  C  ADDR  008AH
 IE . . . . . . . . . . . . . . . . .  D  ADDR  00A8H
 IE0. . . . . . . . . . . . . . . . .  B  ADDR  0089H  NOT USED
 IE1. . . . . . . . . . . . . . . . .  B  ADDR  008BH  NOT USED
@@ -293,9 +296,7 @@ IT1. . . . . . . . . . . . . . . . .  B  ADDR  008AH  NOT USED
 KBE. . . . . . . . . . . . . . . . .  D  ADDR  009DH  NOT USED
 KBF. . . . . . . . . . . . . . . . .  D  ADDR  009EH  NOT USED
 KBLS . . . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
-MINUTEN. . . . . . . . . . . . . . .  C  ADDR  007EH
-NURANZEIGE . . . . . . . . . . . . .  C  ADDR  006BH
-NURRT. . . . . . . . . . . . . . . .  C  ADDR  003EH
+NURANZEIGE . . . . . . . . . . . . .  C  ADDR  006AH
 OSCCON . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
 OV . . . . . . . . . . . . . . . . .  B  ADDR  00D2H  NOT USED
 P. . . . . . . . . . . . . . . . . .  B  ADDR  00D0H  NOT USED
@@ -337,7 +338,6 @@ RESET. . . . . . . . . . . . . . . .  C  ADDR  0000H  NOT USED
 RI . . . . . . . . . . . . . . . . .  B  ADDR  0098H  NOT USED
 RS0. . . . . . . . . . . . . . . . .  B  ADDR  00D3H  NOT USED
 RS1. . . . . . . . . . . . . . . . .  B  ADDR  00D4H  NOT USED
-RT . . . . . . . . . . . . . . . . .  C  ADDR  005AH
 RXD. . . . . . . . . . . . . . . . .  B  ADDR  00B0H  NOT USED
 SADDR. . . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
 SADDR_0. . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
@@ -347,7 +347,6 @@ SADEN_0. . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
 SADEN_1. . . . . . . . . . . . . . .  D  ADDR  00BAH  NOT USED
 SBUF . . . . . . . . . . . . . . . .  D  ADDR  0099H  NOT USED
 SCON . . . . . . . . . . . . . . . .  D  ADDR  0098H  NOT USED
-SEKUNDEN . . . . . . . . . . . . . .  C  ADDR  0082H
 SINT . . . . . . . . . . . . . . . .  C  ADDR  0023H  NOT USED
 SM0. . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
 SM1. . . . . . . . . . . . . . . . .  B  ADDR  009EH  NOT USED
@@ -359,8 +358,6 @@ SPDAT. . . . . . . . . . . . . . . .  D  ADDR  00C5H  NOT USED
 SPDR . . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
 SPSR . . . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
 SPSTA. . . . . . . . . . . . . . . .  D  ADDR  00C4H  NOT USED
-STARTTIMER . . . . . . . . . . . . .  C  ADDR  004EH
-STOPTIMER. . . . . . . . . . . . . .  C  ADDR  0054H
 T0 . . . . . . . . . . . . . . . . .  B  ADDR  00B4H  NOT USED
 T1 . . . . . . . . . . . . . . . . .  B  ADDR  00B5H  NOT USED
 T2CON. . . . . . . . . . . . . . . .  D  ADDR  00C8H  NOT USED
@@ -376,7 +373,7 @@ TH0. . . . . . . . . . . . . . . . .  D  ADDR  008CH
 TH1. . . . . . . . . . . . . . . . .  D  ADDR  008DH  NOT USED
 TH2. . . . . . . . . . . . . . . . .  D  ADDR  00CDH  NOT USED
 TI . . . . . . . . . . . . . . . . .  B  ADDR  0099H  NOT USED
-TIMER. . . . . . . . . . . . . . . .  C  ADDR  0061H
+TIMER. . . . . . . . . . . . . . . .  C  ADDR  005EH
 TIMER0 . . . . . . . . . . . . . . .  C  ADDR  000BH  NOT USED
 TIMER1 . . . . . . . . . . . . . . .  C  ADDR  001BH  NOT USED
 TIMER2 . . . . . . . . . . . . . . .  C  ADDR  002BH  NOT USED
@@ -392,4 +389,5 @@ WDTCON . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
 WDTPRG . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
 WDTRST . . . . . . . . . . . . . . .  D  ADDR  00A6H  NOT USED
 WR . . . . . . . . . . . . . . . . .  B  ADDR  00B6H  NOT USED
-ZEIGEN . . . . . . . . . . . . . . .  C  ADDR  0086H
+ZEIGEN . . . . . . . . . . . . . . .  C  ADDR  00A5H
+ZEIGEN_RET . . . . . . . . . . . . .  C  ADDR  00A1H

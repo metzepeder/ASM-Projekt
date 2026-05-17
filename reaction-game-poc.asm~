@@ -1,182 +1,184 @@
 ;-------------------------------------------------
-;Countdown / Zaehlt auf Null
-;in Minuten und Sekunden
+; Reaction Game
+; Automatischer Start → LED an → Reaktionszeit messen
 ;
-; mit 4x7-segment anzeige
+; P2.0 = 1er Hundertstel  => R2
+; P2.1 = 10er Hundertstel => R3
+; P2.2 = 1er Sekunden     => R4
+; P2.3 = 10er Sekunden    => R5
 ;
-; P2.0 =  1er Sekunden => P3=R2
-; P2.1 = 10er Sekunden => P3=R3
-; P2.2 =  1er Minuten  => P3=R4
-; P2.3 = 10er Minuten  => P3=R5
+; Reaktion = P1.1
+; Reset    = P1.2
+; LED      = P0.0
 ;
-; Hauptprogrammschleife
-;
-; Start = P1.0
-; Stop  = P1.1
-; Reset = P1.2
-; -------------------------------------------------
+; State (30h): 01=WAITING, 02=ACTIVE, 03=RESULT
+; RandDelay (31h): Verzögerungs-Zähler
+; RandSeed  (32h): Freier Zähler als Zufallsquelle
+;-------------------------------------------------
 cseg at 0h
 ajmp init
 cseg at 100h
 
-; ------------------------------------------------
+;-------------------------------------------------
 ; Interrupt für TIMER0: Einsprung bei 0Bh
 ;-------------------------------------------------
 ORG 0Bh
 call timer
 reti
-;-------------------------------------------------------
-;init: TIMER wird initialisiert
-; für 40 ms benötigt man einen 16 bit Timer
-; das dauert zu lange in der Simulation! 
-; Daher hier eine kurze Variante!
-; Es wird nur von C0h auf FFh hochgezählt und 
-; dann der Timer wird auf C0h gesetzt
-; (für Hardware müsste das ersetzt werden!)
-;-------------------------------------------------------
+
 ORG 20h
 init:
-mov IE, #10010010b
-mov tmod, #00000010b
-mov r7, #00h ; Minuten
-mov r6, #00h ; Sekunden
-mov tl0, #0c0h  ; Timer-Initionalsierung 
-mov th0, #0c0h
-mov P1,#00h
-setb P0.0 ; Merker für RESET
-;-----------------------------------------------------------------------
-; die Voreingestellten Minuten und Sekunden erscheinen auf dem Display
-;-----------------------------------------------------------------------
-call zeigen
-;---------------------------
+    mov IE, #10010010b    ; Global + Timer0 Interrupt
+    mov tmod, #00000010b  ; Timer0 Mode 2 (8-bit auto-reload)
+    mov tl0, #0c0h
+    mov th0, #0c0h
+    mov r1, #00h          ; ISR Tick-Zähler
+    mov r6, #00h          ; Reaktionszeit: Hundertstel
+    mov r7, #00h          ; Reaktionszeit: Sekunden
+    ; 32h wird nicht zurückgesetzt (Zufallsquelle läuft durch)
+    clr P0.0              ; LED aus
+    setb tr0              ; Timer dauerhaft starten
+    ; Zufälligen Delay berechnen und direkt WAITING starten
+    mov a, 32h
+    anl a, #3Fh           ; Maske 0-63
+    add a, #14h           ; Minimum 20 → Bereich: 20-83 Ticks
+    mov 31h, a
+    mov 30h, #01h         ; State = WAITING
+    call zeigen
+
+;-------------------------------------------------
+; Hauptschleife
+;-------------------------------------------------
 anfang:
-jnb p1.0, starttimer
-jnb p1.1, stoptimer
-nurRT:
-jnb p1.2, RT
-jnb tr0, da
-ajmp anfang
-da:
-call display
-jnb P0.0, nurRT
-ajmp anfang
-;------------------------------
-; Hauptprogrammschleife
-;
-; Start = P1.0
-; Stop  = P1.1
-; Reset = P1.2
-;------------------------------
-starttimer:
-setb tr0; start timer0
-setb P1.0
-ajmp anfang
-; stop Timer
-stoptimer:
-clr tr0; stop timer
-setb P1.1
-ajmp anfang
-; reset Timer
-RT:
-clr tr0; stop timer
-setb P1.2
-ljmp init
-;---------------------------------------------
-; timer
-; Zählt 1 Sekunde: 25 mal 40 Millisekunden
-; 24mal wird nur die Anzeige "refresht"
-; beim 25mal wird die Zeit runter gezählt
-;(hier: nur 2mal und nur wenige my Sekunden)
-;---------------------------------------------
+    jnb p1.2, do_reset        ; P1.2: Reset + Neustart (jederzeit)
+    mov a, 30h
+    cjne a, #02h, anfang      ; nur in ACTIVE auf Reaktionstaste prüfen
+    jnb p1.1, do_react        ; ACTIVE: Reaktionstaste (P1.1)
+    ajmp anfang
+
+do_react:
+    mov 30h, #03h             ; State = RESULT
+    clr P0.0                  ; LED aus
+    call zeigen
+    ajmp anfang
+
+do_reset:
+    ljmp init                 ; Reset + Neustart
+
+;-------------------------------------------------
+; Timer ISR
+;-------------------------------------------------
 timer:
-inc r1
-cjne r1, #02h, nuranzeige
-mov r1, #00h
-call countup
-ret
+    inc 32h                   ; Zufalls-Seed läuft immer
+    inc r1
+    cjne r1, #02h, nuranzeige
+    mov r1, #00h
+    call gamelogic
+    ret
 
 nuranzeige:
-call display
-ret
+    call display
+    ret
 
-countup:
-inc r6
-cjne r6, #3ch, sekunden
-mov r6, #00h
-inc r7
-cjne r7, #63h, minuten
-hupe:
-clr tr0; stop timer
-clr P0.0
-ret
-
-minuten:
-; mov r6, #3bh
-; dec r7
-call zeigen
-ret
-sekunden:
-; inc r6
-call zeigen
-ret
-;-------------------------------------------------------
-; Anzeigewerte: holt die Anzeigewerte aus der Datenbank
-; - erst wird aus dem Hex_Wert ein Dezimalwert : BCD-Umrechnung
-; dann wird der Wert mit @A+DPTR aus der Datenbank 
-; in die Register geschrieben
-; 1er Sekunden => P3=R2
-; 10er Sekunden => P3=R3
-; 1er Minuten  => P3=R4
-; 10er Minuten  => P3=R5
-;-------------------------------------------------------
-zeigen:
-mov DPTR, #table
-mov a, R6
-mov b, #0ah
-div ab
-mov R0, a
-movc a,@a+dptr
-mov r3, a
-mov a, r0
-xch a,b
-movc a, @a+dptr
-mov r2, a
-;----------------
-mov a, R7
-mov b, #0ah
-div ab
-mov R0, a
-movc a,@a+dptr
-mov r5, a
-mov a, r0
-xch a,b
-movc a, @a+dptr
-mov r4, a
-call display
-ret
-;-----------------------------------------------
-;   DISPLAY: steuert die 4x7 Segmentanzeige
-;-----------------------------------------------
-display:
-mov P3, R2
-clr P2.0
-setb P2.0
-
-mov P3, R3
-clr P2.1
-setb P2.1
-
-mov P3, R4
-clr P2.2
-setb P2.2
-
-mov P3, R5
-clr P2.3
-setb P2.3
-
-ret
 ;-------------------------------------------------
-; TABLE: Datenbank der 7-Segment-Darstellung
+; Spiellogik (je Tick aus der ISR)
+;-------------------------------------------------
+gamelogic:
+    mov a, 30h
+    cjne a, #01h, check_gl_active
+
+    ; WAITING: Delay herunterzählen bis LED angeht
+    djnz 31h, gl_ret
+    setb P0.0                 ; LED an
+    mov 30h, #02h             ; State = ACTIVE
+    mov r6, #00h
+    mov r7, #00h
+    call zeigen
+    ret
+
+check_gl_active:
+    cjne a, #02h, gl_ret
+
+    ; ACTIVE: Reaktionszeit hochzählen
+    call countup
+    ret
+
+gl_ret:
+    call zeigen
+    ret
+
+;-------------------------------------------------
+; Reaktionszeit in Hundertstel-Sekunden hochzählen
+; Maximum: 9.99 Sekunden → Timeout
+;-------------------------------------------------
+countup:
+    inc r6
+    cjne r6, #64h, zeigen_ret ; noch keine 100 Hundertstel
+    mov r6, #00h
+    inc r7
+    cjne r7, #0Ah, zeigen_ret ; noch keine 10 Sekunden
+    ; Timeout: zu langsam → fixiere Anzeige auf 9.99
+    mov r7, #09h
+    mov r6, #63h
+    mov 30h, #03h             ; State = RESULT
+    clr P0.0                  ; LED aus
+
+zeigen_ret:
+    call zeigen
+    ret
+
+;-------------------------------------------------
+; zeigen: BCD-Wandlung und Segment-Lookup
+;-------------------------------------------------
+zeigen:
+    mov DPTR, #table
+    mov a, R6
+    mov b, #0ah
+    div ab
+    mov R0, a
+    movc a,@a+dptr
+    mov r3, a
+    mov a, r0
+    xch a,b
+    movc a, @a+dptr
+    mov r2, a
+    mov a, R7
+    mov b, #0ah
+    div ab
+    mov R0, a
+    movc a,@a+dptr
+    mov r5, a
+    mov a, r0
+    xch a,b
+    movc a, @a+dptr
+    mov r4, a
+    call display
+    ret
+
+;-------------------------------------------------
+; display: Multiplext 4-stellige 7-Segment-Anzeige
+;-------------------------------------------------
+display:
+    mov P3, R2
+    clr P2.0
+    setb P2.0
+
+    mov P3, R3
+    clr P2.1
+    setb P2.1
+
+    mov P3, R4
+    clr P2.2
+    setb P2.2
+
+    mov P3, R5
+    clr P2.3
+    setb P2.3
+
+    ret
+
+;-------------------------------------------------
+; TABLE: 7-Segment-Kodierung für 0-9
 ;-------------------------------------------------
 org 300h
 table:
