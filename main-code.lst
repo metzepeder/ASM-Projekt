@@ -1,0 +1,575 @@
+main-code                                                                                                               PAGE 1
+                         1     ;==============================================================
+                         2     ; Reaktionszeitmesser fuer 8051
+                         3     ;
+                         4     ; Hardware:
+                         5     ;   P1.0 = LED (Startsignal, aktiv LOW)
+                         6     ;   P3.2 = Taster (INT0, aktiv LOW)
+                         7     ;   P2   = 7-Segment Anzeige Datenleitungen
+                         8     ;   P0.0 = Digit-Select Stelle 1 (Hunderter ms)
+                         9     ;   P0.1 = Digit-Select Stelle 2 (Zehner ms)
+                        10     ;   P0.2 = Digit-Select Stelle 3 (Einer ms)
+                        11     ;
+                        12     ; Ablauf:
+                        13     ;   1. Zufaellige Wartezeit (1 - 15 s, LFSR-RNG)
+                        14     ;   2. LED leuchtet auf
+                        15     ;   3. Spieler drueckt Taster
+                        16     ;   4. Reaktionszeit wird in ms auf Display angezeigt
+                        17     ;   5. Bei False Start (zu frueh): Neustart
+                        18     ;
+                        19     ; Takt: 12 MHz  ->  1 Maschinenzyklus = 1 us
+                        20     ;       Timer-0 Mode 1 (16-bit), Reload fuer 1 ms: 64536 = FC18H
+                        21     ;==============================================================
+                        22
+                        23     ; --- Speicherbereiche (iRAM) ---
+  0030                  24     REACT_H     EQU 30H     ; Reaktionszeit High-Byte (ms)
+  0031                  25     REACT_L     EQU 31H     ; Reaktionszeit Low-Byte  (ms)
+  0032                  26     RAND_SEED   EQU 32H     ; Zufallszahl (LFSR-Zustand)
+  0033                  27     DISP_1      EQU 33H     ; Segmentwert Stelle 1 (Hunderter)
+  0034                  28     DISP_2      EQU 34H     ; Segmentwert Stelle 2 (Zehner)
+  0035                  29     DISP_3      EQU 35H     ; Segmentwert Stelle 3 (Einer)
+  0036                  30     STATE       EQU 36H     ; Zustandsvariable
+                        31
+                        32     ; State-Konstanten
+  0000                  33     ST_WAIT     EQU 00H     ; Warten / Zufallsverzoegerung
+  0001                  34     ST_MEASURE  EQU 01H     ; LED an, Zeit wird gemessen
+  0002                  35     ST_SHOW     EQU 02H     ; Ergebnis anzeigen
+                        36
+                        37
+  0090                  38     LED     EQU P1.0    ; Port 1, Bit 0
+  00B2                  39     BUTTON  EQU P3.2    ; Port 3, Bit 2 (INT0)
+                        40
+                        41     ; --- Timer-0 Reload fuer 1 ms bei 12 MHz ---
+                        42     ; 65536 - 1000 = 64536 = FC18H
+  00FC                  43     T0_RELOAD_H EQU 0FCH
+  0018                  44     T0_RELOAD_L EQU 018H
+                        45
+                        46     ; --- Maximale Messzeit: 999 ms = 03E7H ---
+  0003                  47     REACT_MAX_H EQU 03H
+  00E7                  48     REACT_MAX_L EQU 0E7H
+                        49
+                        50     ;==============================================================
+                        51     ; RESET- UND INTERRUPT-VEKTOREN
+                        52     ;==============================================================
+                        53         ORG 0000H
+0000 020030             54         LJMP MAIN               ; Reset-Vektor
+                        55
+                        56         ORG 0003H               ; INT0-Vektor (Taster)
+0003 020084             57         LJMP ISR_BUTTON
+                        58
+                        59         ORG 000BH               ; Timer-0-Vektor (ms-Zaehler)
+000B 02009F             60         LJMP ISR_TIMER0
+                        61
+                        62     ;==============================================================
+                        63     ; HAUPTPROGRAMM
+                        64     ;==============================================================
+                        65         ORG 0030H
+                        66
+                        67     MAIN:
+0030 758160             68         MOV SP, #60H
+                        69
+                        70         ; Ports: LED aus (aktiv LOW -> Ausgang HIGH)
+0033 7590FF             71         MOV P1, #0FFH
+0036 75A000             72         MOV P2, #00H
+0039 758000             73         MOV P0, #00H
+                        74
+                        75         ; Zustand und Messvariablen initialisieren
+003C 753600             76         MOV STATE,     #ST_WAIT
+003F 753000             77         MOV REACT_H,   #00H
+0042 753100             78         MOV REACT_L,   #00H
+0045 7532A5             79         MOV RAND_SEED, #0A5H    ; LFSR-Startwert (darf nicht 0 sein)
+                        80
+                        81         ; Timer 0: Mode 1 (16-bit), noch gestoppt
+0048 758901             82         MOV TMOD, #01H
+004B 758CFC             83         MOV TH0,  #T0_RELOAD_H
+004E 758A18             84         MOV TL0,  #T0_RELOAD_L
+                        85
+                        86         ; Interrupts: INT0 flankengetriggert, Timer0 und INT0 freigeben
+0051 D288               87         SETB IT0
+0053 D2A8               88         SETB EX0
+0055 D2A9               89         SETB ET0
+0057 D2AF               90         SETB EA
+                        91
+                        92         ; --- START-BLINK: LED kurz aufleuchten als Bereitschaftssignal ---
+0059 C290               93         CLR  LED            ; LED an (aktiv LOW)
+005B 7EFF               94         MOV  R6, #0FFH     ; \
+                        95         BLINK_WAIT:         ;  > kurze Verzoegerung (~50ms bei 12MHz)
+005D 7FFF               96         MOV  R7, #0FFH     ;  |
+                        97         BW_INNER:           ;  |
+005F DFFE               98         DJNZ R7, BW_INNER  ;  |
+0061 DEFA               99         DJNZ R6, BLINK_WAIT ; /
+0063 D290              100         SETB LED            ; LED aus
+                       101
+                       102     LOOP:
+0065 E536              103         MOV A, STATE
+0067 B40012            104         CJNE A, #ST_WAIT,    CHECK_SHOW
+                       105
+                       106         ; === ST_WAIT: Zufaellig warten, dann LED einschalten ===
+006A 1200CC            107         LCALL RANDOM_WAIT
+006D C290              108         CLR  LED                ; LED an (aktiv LOW)
+006F 753000            109         MOV  REACT_H,   #00H
+0072 753100            110         MOV  REACT_L,   #00H
+0075 753601            111         MOV  STATE,     #ST_MEASURE
+0078 D28C              112         SETB TR0                ; ms-Zaehler starten
+007A 80E9              113         SJMP LOOP
+                       114
+                       115     CHECK_SHOW:
+007C B402E6            116         CJNE A, #ST_SHOW, LOOP
+                       117
+                       118         ; === ST_SHOW: Ergebnis anzeigen, dann Reset ===
+007F 1200FC            119         LCALL DISPLAY_RESULT
+0082 80E1              120         SJMP LOOP
+                       121
+                       122     ;==============================================================
+                       123     ; ISR: Taster (INT0)
+                       124     ; Flankengetriggert - IE0 wird von Hardware geloescht
+                       125     ;==============================================================
+                       126     ISR_BUTTON:
+0084 C0E0              127         PUSH ACC
+0086 E536              128         MOV  A, STATE
+0088 B4010A            129         CJNE A, #ST_MEASURE, FALSE_START
+                       130
+                       131         ; Gueltige Reaktion: Timer stoppen, Zustand wechseln
+008B C28C              132         CLR  TR0
+008D D290              133         SETB LED                ; LED aus
+008F 753602            134         MOV  STATE, #ST_SHOW
+0092 D0E0              135         POP  ACC
+0094 32                136         RETI
+                       137
+                       138     FALSE_START:
+                       139         ; Zu frueh gedrueckt: Reset
+0095 C28C              140         CLR  TR0
+0097 D290              141         SETB LED                ; LED sicherheitshalber aus
+0099 753600            142         MOV  STATE, #ST_WAIT
+009C D0E0              143         POP  ACC
+009E 32                144         RETI
+                       145
+                       146     ;==============================================================
+                       147     ; ISR: Timer 0 - zaehlt Millisekunden
+                       148     ; FIX: Addiert Reload-Wert statt absolutem Ueberschreiben,
+                       149     ;      um Jitter durch ISR-Latenz zu kompensieren.
+                       150     ;==============================================================
+                       151     ISR_TIMER0:
+009F C0E0              152         PUSH ACC
+00A1 C0F0              153         PUSH B
+                       154
+                       155         ; Praeziser Reload: aktuellen Zaehlerstand + Reload-Wert
+                       156         ; KOMMENTAR
+00A3 E58A              157         MOV  A, TL0
+00A5 2418              158         ADD  A, #T0_RELOAD_L
+00A7 F58A              159         MOV  TL0, A
+00A9 E58C              160         MOV  A, TH0
+00AB 34FC              161         ADDC A, #T0_RELOAD_H
+00AD F58C              162         MOV  TH0, A
+                       163         ; KOMMENTAR
+                       164
+                       165         ; aenderung
+                       166         ; MOV  TH0, #0xFC
+                       167         ; MOV  TL0, #0x18
+                       168
+                       169         ; 16-bit Inkrement REACT_H:REACT_L
+00AF 0531              170         INC  REACT_L
+00B1 E531              171         MOV  A, REACT_L
+00B3 B40011            172         CJNE A, #00H, ISR_T0_END
+00B6 0530              173         INC  REACT_H
+                       174
+                       175         ; Overflow-Schutz: bei 999 ms stoppen
+00B8 E530              176         MOV  A, REACT_H
+00BA B4030A            177         CJNE A, #REACT_MAX_H, ISR_T0_END
+00BD E531              178         MOV  A, REACT_L
+00BF B4E705            179         CJNE A, #REACT_MAX_L, ISR_T0_END
+00C2 C28C              180         CLR  TR0
+00C4 753602            181         MOV  STATE, #ST_SHOW    ; direkt zur Anzeige
+                       182
+                       183     ISR_T0_END:
+00C7 D0F0              184         POP  B
+00C9 D0E0              185         POP  ACC
+00CB 32                186         RETI
+                       187
+                       188     ;==============================================================
+                       189     ; RANDOM_WAIT: Zufaellige Wartezeit ~1 - 15 s (max. 15 s)
+                       190     ;
+                       191     ; Struktur: R2 Bloecke, je Block R5*R4 Iterationen
+                       192     ;   R2  = 1-15  (unteres Nibble RAND_SEED nach Warmup)
+                       193     ;   R5  = 255   (aeussere Iterationen pro Block)
+                       194     ;   R4  = 255   (innere Iterationen)
+                       195     ;   Pro innere Iteration: LCALL LFSR_STEP + DJNZ ~ 15 us
+                       196     ;   Pro Block: 255 * 255 * 15 us ~ 975 ms ~ 1 s
+                       197     ;   Gesamt:     1 * 975 ms .. 15 * 975 ms  ~  1 - 15 s
+                       198     ;==============================================================
+                       199     RANDOM_WAIT:
+00CC 75A000            200         MOV  P2, #00H
+00CF 758000            201         MOV  P0, #00H
+00D2 D290              202         SETB LED                ; LED aus
+                       203
+                       204         ; LFSR 32x vorlaufen lassen fuer mehr Entropie
+00D4 7E20              205         MOV  R6, #20H
+                       206     RW_WARMUP:
+00D6 1200F1            207         LCALL LFSR_STEP
+00D9 DEFB              208         DJNZ R6, RW_WARMUP
+                       209
+                       210         ; Anzahl Sekunden-Bloecke: 1-15 aus unterem Nibble RAND_SEED
+00DB E532              211         MOV  A, RAND_SEED
+00DD 540F              212         ANL  A, #0FH            ; 0-15
+00DF 7001              213         JNZ  RW_CNT_OK
+00E1 04                214         INC  A                  ; 0 -> 1 (Sicherheit, LFSR liefert nie 0)
+                       215     RW_CNT_OK:
+00E2 FA                216         MOV  R2, A              ; 1-15 Bloecke
+                       217
+                       218     RW_BLOCKS:
+00E3 7DFF              219         MOV  R5, #0FFH
+                       220     RW_OUTER:
+00E5 7CFF              221         MOV  R4, #0FFH
+                       222     RW_INNER:
+00E7 1200F1            223         LCALL LFSR_STEP
+00EA DCFB              224         DJNZ R4, RW_INNER
+00EC DDF7              225         DJNZ R5, RW_OUTER
+00EE DAF3              226         DJNZ R2, RW_BLOCKS
+00F0 22                227         RET
+                       228
+                       229     ;==============================================================
+                       230     ; LFSR_STEP: 8-bit Galois-LFSR
+                       231     ; Polynom: x^8 + x^6 + x^5 + x^4 + 1  (Rueckkopplungsmaske B8H)
+                       232     ; FIX: CLR C vor RLC sichert definierten Eingang;
+                       233     ;      dead-code XRL entfernt.
+                       234     ;==============================================================
+                       235     LFSR_STEP:
+00F1 E532              236         MOV  A, RAND_SEED
+00F3 C3                237         CLR  C
+00F4 33                238         RLC  A                  ; MSB -> Carry, 0 kommt von rechts rein
+00F5 5002              239         JNC  LFSR_NO_XOR
+00F7 64B8              240         XRL  A, #0B8H           ; Galois-Rueckkopplung
+                       241     LFSR_NO_XOR:
+00F9 F532              242         MOV  RAND_SEED, A
+00FB 22                243         RET
+                       244
+                       245     ;==============================================================
+                       246     ; DISPLAY_RESULT: Reaktionszeit (0-999 ms) auf 3 Stellen zeigen
+                       247     ; FIX: Berechnung aus dem vollen 16-bit-Wert REACT_H:REACT_L.
+                       248     ;      Anzeige per Multiplexing fuer ~200 Zyklen, dann STATE 0.
+                       249     ;==============================================================
+                       250     DISPLAY_RESULT:
+                       251         ; --- 16-bit-Wert REACT_H:REACT_L -> Dezimalstellen ---
+                       252         ; Strategie: Hunderter = Ganzzahlanteil / 100
+                       253         ;            Rest -> Zehner und Einer wie bisher
+                       254         ;
+                       255         ; Da Maximum 999 ms = 03E7H, ist REACT_H maximal 3.
+                       256         ; Hunderter = REACT_H * 256/100 + REACT_L/100
+                       257         ; Einfacher: Hunderter direkt per Schleife subtrahieren.
+                       258
+                       259         ; Schritt 1: Hunderter aus 16-bit-Wert
+00FC E530              260         MOV  A, REACT_H
+00FE 8531F0            261         MOV  B, REACT_L
+0101 7800              262         MOV  R0, #00H           ; Hunderterzaehler
+                       263
+                       264     DR_HUNDRED:
+                       265         ; Subtrahiere 100 (= 0064H) solange >= 100
+0103 E5F0              266         MOV  A, B
+0105 9464              267         SUBB A, #64H            ; Low-Byte - 100 (C gesetzt wenn Borrow)
+0107 400D              268         JC   DR_HUNDRED_DONE
+0109 F5F0              269         MOV  B, A               ; Low-Byte-Rest merken
+010B E530              270         MOV  A, REACT_H
+                       271         ; REACT_H muss Borrow beruecksichtigen (bereits in C)
+010D 9400              272         SUBB A, #00H            ; zieht Carry ab
+010F 4005              273         JC   DR_HUNDRED_DONE    ; REACT_H wurde negativ -> fertig
+0111 F530              274         MOV  REACT_H, A
+0113 08                275         INC  R0
+0114 80ED              276         SJMP DR_HUNDRED
+                       277
+                       278     DR_HUNDRED_DONE:
+                       279         ; Hunderterstelle wiederherstellen (letzte Subtraktion rueckgaengig)
+0116 8833              280         MOV  DISP_1, R0
+                       281
+                       282         ; Schritt 2: Zehner aus verbliebendem Rest in B (0-99)
+0118 E5F0              283         MOV  A, B
+011A 75F00A            284         MOV  B, #10
+011D 84                285         DIV  AB
+011E F534              286         MOV  DISP_2, A          ; Zehner
+0120 85F035            287         MOV  DISP_3, B          ; Einer
+                       288
+                       289         ; Schritt 3: Multiplexing ~200 Durchlaeufe
+0123 7BC8              290         MOV  R3, #200
+                       291
+                       292     DISP_LOOP:
+0125 E533              293         MOV  A, DISP_1
+0127 120158            294         LCALL SEG_LOOKUP
+012A F5A0              295         MOV  P2, A
+012C 758001            296         MOV  P0, #01H
+012F 12015D            297         LCALL SHORT_DELAY
+                       298
+0132 E534              299         MOV  A, DISP_2
+0134 120158            300         LCALL SEG_LOOKUP
+0137 F5A0              301         MOV  P2, A
+0139 758002            302         MOV  P0, #02H
+013C 12015D            303         LCALL SHORT_DELAY
+                       304
+013F E535              305         MOV  A, DISP_3
+0141 120158            306         LCALL SEG_LOOKUP
+0144 F5A0              307         MOV  P2, A
+0146 758004            308         MOV  P0, #04H
+0149 12015D            309         LCALL SHORT_DELAY
+                       310
+014C DBD7              311         DJNZ R3, DISP_LOOP
+                       312
+                       313         ; Display aus, Zustand zuruecksetzen
+014E 75A000            314         MOV  P2, #00H
+0151 758000            315         MOV  P0, #00H
+0154 753600            316         MOV  STATE, #ST_WAIT
+0157 22                317         RET
+                       318
+                       319     ;==============================================================
+                       320     ; SEG_LOOKUP: Ziffer (0-9) -> 7-Segment-Muster
+                       321     ; Common Cathode, aktiv HIGH
+                       322     ; Eingabe:  A = Ziffer
+                       323     ; Ausgabe:  A = Segmentmuster
+                       324     ;==============================================================
+                       325     SEG_LOOKUP:
+0158 900162            326         MOV  DPTR, #SEG_TABLE
+015B 93                327         MOVC A, @A+DPTR
+015C 22                328         RET
+                       329
+                       330     ;==============================================================
+                       331     ; SHORT_DELAY: ~100 us Verzoegerung fuer Display-Multiplexing
+                       332     ;==============================================================
+                       333     SHORT_DELAY:
+015D 7F80              334         MOV  R7, #80H
+                       335     SD_LOOP:
+015F DFFE              336         DJNZ R7, SD_LOOP
+0161 22                337         RET
+                       338
+                       339     ;==============================================================
+                       340     ; 7-SEGMENT-TABELLE (Common Cathode, aktiv HIGH)
+                       341     ; FIX: Hierher verschoben (war vor ORG 0000H -> ueberschrieb
+                       342     ;      den Reset-Vektor mit Datenbytes).
+                       343     ; Index: 0  1    2    3    4    5    6    7    8    9
+                       344     ;==============================================================
+                       345     SEG_TABLE:
+0162 3F065B4F66        346         DB 3FH, 06H, 5BH, 4FH, 66H, 6DH, 7DH, 07H, 7FH, 6FH
+     6D7D077F6F
+                       347
+                       348         END
+ASSEMBLY COMPLETE, NO ERRORS FOUND, NO WARNINGS
+
+
+SYMBOL TABLE:
+??MCU_8051_IDE . . . . . . . . . . .  N  NUMB  8051H  NOT USED
+??VERSION. . . . . . . . . . . . . .  N  NUMB  0149H  NOT USED
+AC . . . . . . . . . . . . . . . . .  B  ADDR  00D6H  NOT USED
+ACC. . . . . . . . . . . . . . . . .  D  ADDR  00E0H
+ACSR . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+ADCF . . . . . . . . . . . . . . . .  D  ADDR  00F6H  NOT USED
+ADCLK. . . . . . . . . . . . . . . .  D  ADDR  00F2H  NOT USED
+ADCON. . . . . . . . . . . . . . . .  D  ADDR  00F3H  NOT USED
+ADDH . . . . . . . . . . . . . . . .  D  ADDR  00F5H  NOT USED
+ADDL . . . . . . . . . . . . . . . .  D  ADDR  00F4H  NOT USED
+AUXR . . . . . . . . . . . . . . . .  D  ADDR  008EH  NOT USED
+AUXR1. . . . . . . . . . . . . . . .  D  ADDR  00A2H  NOT USED
+B. . . . . . . . . . . . . . . . . .  D  ADDR  00F0H
+BDRCON . . . . . . . . . . . . . . .  D  ADDR  009BH  NOT USED
+BDRCON_1 . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+BLINK_WAIT . . . . . . . . . . . . .  C  ADDR  005DH
+BRL. . . . . . . . . . . . . . . . .  D  ADDR  009AH  NOT USED
+BUTTON . . . . . . . . . . . . . . .  N  NUMB  00B2H  NOT USED
+BW_INNER . . . . . . . . . . . . . .  C  ADDR  005FH
+CCAP0H . . . . . . . . . . . . . . .  D  ADDR  00FAH  NOT USED
+CCAP0L . . . . . . . . . . . . . . .  D  ADDR  00EAH  NOT USED
+CCAP1H . . . . . . . . . . . . . . .  D  ADDR  00FBH  NOT USED
+CCAP1L . . . . . . . . . . . . . . .  D  ADDR  00EBH  NOT USED
+CCAP2H . . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAP3H . . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAP4H . . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL2H. . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAPL2L. . . . . . . . . . . . . . .  D  ADDR  00ECH  NOT USED
+CCAPL3H. . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAPL3L. . . . . . . . . . . . . . .  D  ADDR  00EDH  NOT USED
+CCAPL4H. . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL4L. . . . . . . . . . . . . . .  D  ADDR  00EEH  NOT USED
+CCAPM0 . . . . . . . . . . . . . . .  D  ADDR  00DAH  NOT USED
+CCAPM1 . . . . . . . . . . . . . . .  D  ADDR  00DBH  NOT USED
+CCAPM2 . . . . . . . . . . . . . . .  D  ADDR  00DCH  NOT USED
+CCAPM3 . . . . . . . . . . . . . . .  D  ADDR  00DDH  NOT USED
+CCAPM4 . . . . . . . . . . . . . . .  D  ADDR  00DEH  NOT USED
+CCF0 . . . . . . . . . . . . . . . .  B  ADDR  00D8H  NOT USED
+CCF1 . . . . . . . . . . . . . . . .  B  ADDR  00D9H  NOT USED
+CCF2 . . . . . . . . . . . . . . . .  B  ADDR  00DAH  NOT USED
+CCF3 . . . . . . . . . . . . . . . .  B  ADDR  00DBH  NOT USED
+CCF4 . . . . . . . . . . . . . . . .  B  ADDR  00DCH  NOT USED
+CCON . . . . . . . . . . . . . . . .  D  ADDR  00D8H  NOT USED
+CFINT. . . . . . . . . . . . . . . .  C  ADDR  0033H  NOT USED
+CH . . . . . . . . . . . . . . . . .  D  ADDR  00F9H  NOT USED
+CHECK_SHOW . . . . . . . . . . . . .  C  ADDR  007CH
+CKCON. . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKCON0 . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKRL . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+CKSEL. . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+CL . . . . . . . . . . . . . . . . .  D  ADDR  00E9H  NOT USED
+CLKREG . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CMOD . . . . . . . . . . . . . . . .  D  ADDR  00D9H  NOT USED
+CPRL2. . . . . . . . . . . . . . . .  B  ADDR  00C8H  NOT USED
+CR . . . . . . . . . . . . . . . . .  B  ADDR  00DEH  NOT USED
+CT2. . . . . . . . . . . . . . . . .  B  ADDR  00C9H  NOT USED
+CY . . . . . . . . . . . . . . . . .  B  ADDR  00D7H  NOT USED
+DISPLAY_RESULT . . . . . . . . . . .  C  ADDR  00FCH
+DISP_1 . . . . . . . . . . . . . . .  N  NUMB  0033H
+DISP_2 . . . . . . . . . . . . . . .  N  NUMB  0034H
+DISP_3 . . . . . . . . . . . . . . .  N  NUMB  0035H
+DISP_LOOP. . . . . . . . . . . . . .  C  ADDR  0125H
+DP0H . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
+DP0L . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
+DP1H . . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+DP1L . . . . . . . . . . . . . . . .  D  ADDR  0084H  NOT USED
+DPH. . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
+DPL. . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
+DR_HUNDRED . . . . . . . . . . . . .  C  ADDR  0103H
+DR_HUNDRED_DONE. . . . . . . . . . .  C  ADDR  0116H
+EA . . . . . . . . . . . . . . . . .  B  ADDR  00AFH
+EC . . . . . . . . . . . . . . . . .  B  ADDR  00AEH  NOT USED
+EECON. . . . . . . . . . . . . . . .  D  ADDR  0096H  NOT USED
+ES . . . . . . . . . . . . . . . . .  B  ADDR  00ACH  NOT USED
+ET0. . . . . . . . . . . . . . . . .  B  ADDR  00A9H
+ET1. . . . . . . . . . . . . . . . .  B  ADDR  00ABH  NOT USED
+ET2. . . . . . . . . . . . . . . . .  B  ADDR  00ADH  NOT USED
+EX0. . . . . . . . . . . . . . . . .  B  ADDR  00A8H
+EX1. . . . . . . . . . . . . . . . .  B  ADDR  00AAH  NOT USED
+EXEN2. . . . . . . . . . . . . . . .  B  ADDR  00CBH  NOT USED
+EXF2 . . . . . . . . . . . . . . . .  B  ADDR  00CEH  NOT USED
+EXTI0. . . . . . . . . . . . . . . .  C  ADDR  0003H  NOT USED
+EXTI1. . . . . . . . . . . . . . . .  C  ADDR  0013H  NOT USED
+F0 . . . . . . . . . . . . . . . . .  B  ADDR  00D5H  NOT USED
+FALSE_START. . . . . . . . . . . . .  C  ADDR  0095H
+FE . . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+IE . . . . . . . . . . . . . . . . .  D  ADDR  00A8H  NOT USED
+IE0. . . . . . . . . . . . . . . . .  B  ADDR  0089H  NOT USED
+IE1. . . . . . . . . . . . . . . . .  B  ADDR  008BH  NOT USED
+INT0 . . . . . . . . . . . . . . . .  B  ADDR  00B2H  NOT USED
+INT1 . . . . . . . . . . . . . . . .  B  ADDR  00B3H  NOT USED
+IP . . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPH. . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH0 . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH1 . . . . . . . . . . . . . . . .  D  ADDR  00B3H  NOT USED
+IPL0 . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPL1 . . . . . . . . . . . . . . . .  D  ADDR  00B2H  NOT USED
+ISR_BUTTON . . . . . . . . . . . . .  C  ADDR  0084H
+ISR_T0_END . . . . . . . . . . . . .  C  ADDR  00C7H
+ISR_TIMER0 . . . . . . . . . . . . .  C  ADDR  009FH
+IT0. . . . . . . . . . . . . . . . .  B  ADDR  0088H
+IT1. . . . . . . . . . . . . . . . .  B  ADDR  008AH  NOT USED
+KBE. . . . . . . . . . . . . . . . .  D  ADDR  009DH  NOT USED
+KBF. . . . . . . . . . . . . . . . .  D  ADDR  009EH  NOT USED
+KBLS . . . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+LED. . . . . . . . . . . . . . . . .  N  NUMB  0090H
+LFSR_NO_XOR. . . . . . . . . . . . .  C  ADDR  00F9H
+LFSR_STEP. . . . . . . . . . . . . .  C  ADDR  00F1H
+LOOP . . . . . . . . . . . . . . . .  C  ADDR  0065H
+MAIN . . . . . . . . . . . . . . . .  C  ADDR  0030H
+OSCCON . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+OV . . . . . . . . . . . . . . . . .  B  ADDR  00D2H  NOT USED
+P. . . . . . . . . . . . . . . . . .  B  ADDR  00D0H  NOT USED
+P0 . . . . . . . . . . . . . . . . .  D  ADDR  0080H
+P1 . . . . . . . . . . . . . . . . .  D  ADDR  0090H
+P1M1 . . . . . . . . . . . . . . . .  D  ADDR  00D4H  NOT USED
+P1M2 . . . . . . . . . . . . . . . .  D  ADDR  00E2H  NOT USED
+P2 . . . . . . . . . . . . . . . . .  D  ADDR  00A0H
+P3 . . . . . . . . . . . . . . . . .  D  ADDR  00B0H  NOT USED
+P3M1 . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+P3M2 . . . . . . . . . . . . . . . .  D  ADDR  00E3H  NOT USED
+P4 . . . . . . . . . . . . . . . . .  D  ADDR  00C0H  NOT USED
+P4M1 . . . . . . . . . . . . . . . .  D  ADDR  00D6H  NOT USED
+P4M2 . . . . . . . . . . . . . . . .  D  ADDR  00E4H  NOT USED
+P5 . . . . . . . . . . . . . . . . .  D  ADDR  00E8H  NOT USED
+PC . . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PCON . . . . . . . . . . . . . . . .  D  ADDR  0087H  NOT USED
+PPCL . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PS . . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSL. . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSW. . . . . . . . . . . . . . . . .  D  ADDR  00D0H  NOT USED
+PT0. . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT0L . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT1. . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT1L . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT2. . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PT2L . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PX0. . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX0L . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX1. . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+PX1L . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+RANDOM_WAIT. . . . . . . . . . . . .  C  ADDR  00CCH
+RAND_SEED. . . . . . . . . . . . . .  N  NUMB  0032H
+RB8. . . . . . . . . . . . . . . . .  B  ADDR  009AH  NOT USED
+RCAP2H . . . . . . . . . . . . . . .  D  ADDR  00CBH  NOT USED
+RCAP2L . . . . . . . . . . . . . . .  D  ADDR  00CAH  NOT USED
+RCLK . . . . . . . . . . . . . . . .  B  ADDR  00CDH  NOT USED
+RD . . . . . . . . . . . . . . . . .  B  ADDR  00B7H  NOT USED
+REACT_H. . . . . . . . . . . . . . .  N  NUMB  0030H
+REACT_L. . . . . . . . . . . . . . .  N  NUMB  0031H
+REACT_MAX_H. . . . . . . . . . . . .  N  NUMB  0003H
+REACT_MAX_L. . . . . . . . . . . . .  N  NUMB  00E7H
+REN. . . . . . . . . . . . . . . . .  B  ADDR  009CH  NOT USED
+RESET. . . . . . . . . . . . . . . .  C  ADDR  0000H  NOT USED
+RI . . . . . . . . . . . . . . . . .  B  ADDR  0098H  NOT USED
+RS0. . . . . . . . . . . . . . . . .  B  ADDR  00D3H  NOT USED
+RS1. . . . . . . . . . . . . . . . .  B  ADDR  00D4H  NOT USED
+RW_BLOCKS. . . . . . . . . . . . . .  C  ADDR  00E3H
+RW_CNT_OK. . . . . . . . . . . . . .  C  ADDR  00E2H
+RW_INNER . . . . . . . . . . . . . .  C  ADDR  00E7H
+RW_OUTER . . . . . . . . . . . . . .  C  ADDR  00E5H
+RW_WARMUP. . . . . . . . . . . . . .  C  ADDR  00D6H
+RXD. . . . . . . . . . . . . . . . .  B  ADDR  00B0H  NOT USED
+SADDR. . . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_0. . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_1. . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SADEN. . . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_0. . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_1. . . . . . . . . . . . . . .  D  ADDR  00BAH  NOT USED
+SBUF . . . . . . . . . . . . . . . .  D  ADDR  0099H  NOT USED
+SCON . . . . . . . . . . . . . . . .  D  ADDR  0098H  NOT USED
+SD_LOOP. . . . . . . . . . . . . . .  C  ADDR  015FH
+SEG_LOOKUP . . . . . . . . . . . . .  C  ADDR  0158H
+SEG_TABLE. . . . . . . . . . . . . .  C  ADDR  0162H
+SHORT_DELAY. . . . . . . . . . . . .  C  ADDR  015DH
+SINT . . . . . . . . . . . . . . . .  C  ADDR  0023H  NOT USED
+SM0. . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+SM1. . . . . . . . . . . . . . . . .  B  ADDR  009EH  NOT USED
+SM2. . . . . . . . . . . . . . . . .  B  ADDR  009DH  NOT USED
+SP . . . . . . . . . . . . . . . . .  D  ADDR  0081H
+SPCON. . . . . . . . . . . . . . . .  D  ADDR  00C3H  NOT USED
+SPCR . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+SPDAT. . . . . . . . . . . . . . . .  D  ADDR  00C5H  NOT USED
+SPDR . . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+SPSR . . . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SPSTA. . . . . . . . . . . . . . . .  D  ADDR  00C4H  NOT USED
+STATE. . . . . . . . . . . . . . . .  N  NUMB  0036H
+ST_MEASURE . . . . . . . . . . . . .  N  NUMB  0001H
+ST_SHOW. . . . . . . . . . . . . . .  N  NUMB  0002H
+ST_WAIT. . . . . . . . . . . . . . .  N  NUMB  0000H
+T0 . . . . . . . . . . . . . . . . .  B  ADDR  00B4H  NOT USED
+T0_RELOAD_H. . . . . . . . . . . . .  N  NUMB  00FCH
+T0_RELOAD_L. . . . . . . . . . . . .  N  NUMB  0018H
+T1 . . . . . . . . . . . . . . . . .  B  ADDR  00B5H  NOT USED
+T2CON. . . . . . . . . . . . . . . .  D  ADDR  00C8H  NOT USED
+T2MOD. . . . . . . . . . . . . . . .  D  ADDR  00C9H  NOT USED
+TB8. . . . . . . . . . . . . . . . .  B  ADDR  009BH  NOT USED
+TCLK . . . . . . . . . . . . . . . .  B  ADDR  00CCH  NOT USED
+TCON . . . . . . . . . . . . . . . .  D  ADDR  0088H  NOT USED
+TF0. . . . . . . . . . . . . . . . .  B  ADDR  008DH  NOT USED
+TF1. . . . . . . . . . . . . . . . .  B  ADDR  008FH  NOT USED
+TF2. . . . . . . . . . . . . . . . .  B  ADDR  00CFH  NOT USED
+TH0. . . . . . . . . . . . . . . . .  D  ADDR  008CH
+TH1. . . . . . . . . . . . . . . . .  D  ADDR  008DH  NOT USED
+TH2. . . . . . . . . . . . . . . . .  D  ADDR  00CDH  NOT USED
+TI . . . . . . . . . . . . . . . . .  B  ADDR  0099H  NOT USED
+TIMER0 . . . . . . . . . . . . . . .  C  ADDR  000BH  NOT USED
+TIMER1 . . . . . . . . . . . . . . .  C  ADDR  001BH  NOT USED
+TIMER2 . . . . . . . . . . . . . . .  C  ADDR  002BH  NOT USED
+TL0. . . . . . . . . . . . . . . . .  D  ADDR  008AH
+TL1. . . . . . . . . . . . . . . . .  D  ADDR  008BH  NOT USED
+TL2. . . . . . . . . . . . . . . . .  D  ADDR  00CCH  NOT USED
+TMOD . . . . . . . . . . . . . . . .  D  ADDR  0089H
+TR0. . . . . . . . . . . . . . . . .  B  ADDR  008CH
+TR1. . . . . . . . . . . . . . . . .  B  ADDR  008EH  NOT USED
+TR2. . . . . . . . . . . . . . . . .  B  ADDR  00CAH  NOT USED
+TXD. . . . . . . . . . . . . . . . .  B  ADDR  00B1H  NOT USED
+WDTCON . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTPRG . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTRST . . . . . . . . . . . . . . .  D  ADDR  00A6H  NOT USED
+WR . . . . . . . . . . . . . . . . .  B  ADDR  00B6H  NOT USED
