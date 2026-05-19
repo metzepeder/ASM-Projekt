@@ -15,185 +15,176 @@ reaction-game-poc                                                               
                         14     ; Start = P1.0
                         15     ; Stop  = P1.1
                         16     ; Reset = P1.2
-                        17     ; -------------------------------------------------
-                        18     cseg at 0h
-0000 0120               19     ajmp init
-                        20     cseg at 100h
-                        21
-                        22     ; ------------------------------------------------
-                        23     ; Interrupt für TIMER0: Einsprung bei 0Bh
-                        24     ;-------------------------------------------------
-                        25     ORG 0Bh
-****WARNING:ThisORGhaslowervaluethanthepreviousone
-000B 120061             26     call timer
-000E 32                 27     reti
-                        28     ;-------------------------------------------------------
-                        29     ;init: TIMER wird initialisiert
-                        30     ; für 40 ms benötigt man einen 16 bit Timer
-                        31     ; das dauert zu lange in der Simulation!
-                        32     ; Daher hier eine kurze Variante!
-                        33     ; Es wird nur von C0h auf FFh hochgezählt und
-                        34     ; dann der Timer wird auf C0h gesetzt
-                        35     ; (für Hardware müsste das ersetzt werden!)
-                        36     ;-------------------------------------------------------
-                        37     ORG 20h
-                        38     init:
-0020 75A892             39     mov IE, #10010010b
-0023 758902             40     mov tmod, #00000010b
-0026 7F00               41     mov r7, #00h ; Minuten
-0028 7E00               42     mov r6, #00h ; Sekunden
-002A 758AC0             43     mov tl0, #0c0h  ; Timer-Initionalsierung
-002D 758CC0             44     mov th0, #0c0h
-0030 759000             45     mov P1,#00h
-0033 D280               46     setb P0.0 ; Merker für RESET
-                        47     ;-----------------------------------------------------------------------
-                        48     ; die Voreingestellten Minuten und Sekunden erscheinen auf dem Display
-                        49     ;-----------------------------------------------------------------------
-0035 120085             50     call zeigen
-                        51     ;---------------------------
-                        52     anfang:
-0038 309013             53     jnb p1.0, starttimer
-003B 309116             54     jnb p1.1, stoptimer
-                        55     nurRT:
-003E 309219             56     jnb p1.2, RT
-0041 308C02             57     jnb tr0, da
-0044 0138               58     ajmp anfang
-                        59     da:
+                        17     ;
+                        18     ; P0.0 = Merker RESET
+                        19     ; P0.1 = Lampe (1=aus, 0=an)
+                        20     ; 30h  = Vorcountdown (10 Sek)
+                        21     ; -------------------------------------------------
+                        22     cseg at 0h ; Alles was jetzt kommt an Adresse 0 im Speicher
+0000 0120               23     ajmp init ; Das hier wird direkt ausgeführt
+                        24     cseg at 0Bh ; Wenn Timer abläuft dann führ das aus
+000B 120085             25     call timer
+000E 32                 26     reti ; Ende des Interrupts
+                        27     ;-------------------------------------------------------
+                        28     ; init
+                        29     ;-------------------------------------------------------
+                        30     ORG 20h ; freie Adresse
+                        31     init:
+0020 75A892             32     mov IE, #10010010b
+0023 758902             33     mov tmod, #00000010b
+0026 7F00               34     mov r7, #00h        ; Minuten
+0028 7E00               35     mov r6, #00h        ; Sekunden
+002A 7900               36     mov r1, #00h        ; Interrupt-Zähler
+002C 758AC0             37     mov tl0, #0c0h
+002F 758CC0             38     mov th0, #0c0h
+0032 759000             39     mov P1, #00h
+0035 D280               40     setb P0.0           ; Merker für RESET
+0037 D281               41     setb P0.1           ; Lampe aus
+0039 753064             42     mov 30h, #64h       ; 10 Sekunden Vorcountdown
+003C 1200BB             43     call zeigen
+                        44     initGame:
+003F 75A892             45     mov IE, #10010010b
+0042 758902             46     mov tmod, #00000010b
+0045 7900               47     mov r1, #00h        ; Interrupt-Zähler
+0047 758AC0             48     mov tl0, #0c0h
+004A 758CC0             49     mov th0, #0c0h
+004D 759000             50     mov P1, #00h
+0050 D280               51     setb P0.0           ; Merker für RESET
+0052 D281               52     setb P0.1           ; Lampe aus
+0054 753064             53     mov 30h, #64h       ; 10 Sekunden Vorcountdown
+0057 1200BB             54     call zeigen
+                        55     ;---------------------------
+                        56     anfang:
+005A C280               57     clr P0.0
+005C 309013             58     jnb p1.0, starttimer
+005F 309116             59     jnb p1.1, stoptimer
+                        60     nurRT:
+0062 309219             61     jnb p1.2, RT
+0065 308C02             62     jnb tr0, da
+0068 015A               63     ajmp anfang
+                        64     da:
 ****WARNING:Reservedkeywordusedaslabel
-0046 1200A6             60     call display
-0049 3080F2             61     jnb P0.0, nurRT
-004C 0138               62     ajmp anfang
-                        63     ;------------------------------
-                        64     ; Hauptprogrammschleife
-                        65     ;
-                        66     ; Start = P1.0
-                        67     ; Stop  = P1.1
-                        68     ; Reset = P1.2
-                        69     ;------------------------------
-                        70     starttimer:
-004E D28C               71     setb tr0; start timer0
-0050 D290               72     setb P1.0
-0052 0138               73     ajmp anfang
-                        74     ; stop Timer
-                        75     stoptimer:
-0054 C28C               76     clr tr0; stop timer
-0056 D291               77     setb P1.1
-0058 0138               78     ajmp anfang
-                        79     ; reset Timer
-                        80     RT:
-005A C28C               81     clr tr0; stop timer
-005C D292               82     setb P1.2
-005E 020020             83     ljmp init
-                        84     ;---------------------------------------------
-                        85     ; timer
-                        86     ; Zählt 1 Sekunde: 25 mal 40 Millisekunden
-                        87     ; 24mal wird nur die Anzeige "refresht"
-                        88     ; beim 25mal wird die Zeit runter gezählt
-                        89     ;(hier: nur 2mal und nur wenige my Sekunden)
-                        90     ;---------------------------------------------
-                        91     timer:
-0061 09                 92     inc r1
-0062 B90206             93     cjne r1, #02h, nuranzeige
-0065 7900               94     mov r1, #00h
-0067 12006F             95     call countup
-006A 22                 96     ret
-                        97
-                        98     nuranzeige:
-006B 1200A6             99     call display
-006E 22                100     ret
-                       101
-                       102     countup:
-006F 0E                103     inc r6
-0070 BE3C0E            104     cjne r6, #3ch, sekunden
-0073 7E00              105     mov r6, #00h
-0075 BF0005            106     cjne r7, #0h, minuten
-                       107     hupe:
-0078 C28C              108     clr tr0; stop timer
-007A C280              109     clr P0.0
-007C 22                110     ret
-                       111
-                       112     minuten:
-                       113     ; mov r6, #3bh
-                       114     ; dec r7
-007D 120085            115     call zeigen
-0080 22                116     ret
-                       117     sekunden:
-                       118     ; inc r6
-0081 120085            119     call zeigen
-0084 22                120     ret
-                       121     ;-------------------------------------------------------
-                       122     ; Anzeigewerte: holt die Anzeigewerte aus der Datenbank
-                       123     ; - erst wird aus dem Hex_Wert ein Dezimalwert : BCD-Umrechnung
-                       124     ; dann wird der Wert mit @A+DPTR aus der Datenbank
-                       125     ; in die Register geschrieben
-                       126     ; 1er Sekunden => P3=R2
-                       127     ; 10er Sekunden => P3=R3
-                       128     ; 1er Minuten  => P3=R4
-                       129     ; 10er Minuten  => P3=R5
-                       130     ;-------------------------------------------------------
-                       131     zeigen:
-0085 900300            132     mov DPTR, #table
-0088 EE                133     mov a, R6
-0089 75F00A            134     mov b, #0ah
-008C 84                135     div ab
-008D F8                136     mov R0, a
-008E 93                137     movc a,@a+dptr
-008F FB                138     mov r3, a
-0090 E8                139     mov a, r0
-0091 C5F0              140     xch a,b
-0093 93                141     movc a, @a+dptr
-0094 FA                142     mov r2, a
-                       143     ;----------------
-0095 EF                144     mov a, R7
-0096 75F00A            145     mov b, #0ah
-0099 84                146     div ab
-009A F8                147     mov R0, a
-009B 93                148     movc a,@a+dptr
-009C FD                149     mov r5, a
-009D E8                150     mov a, r0
-009E C5F0              151     xch a,b
-00A0 93                152     movc a, @a+dptr
-00A1 FC                153     mov r4, a
-00A2 1200A6            154     call display
-00A5 22                155     ret
+006A 2081ED             65     jb P0.1, anfang     ; Lampe aus = Vorcountdown läuft, kein Display
+006D 1200DC             66     call display
+0070 015A               67     ajmp anfang
+                        68     ;------------------------------
+                        69     starttimer:
+0072 D28C               70     setb tr0
+0074 D290               71     setb P1.0
+0076 015A               72     ajmp anfang
+                        73     stoptimer:
+0078 C28C               74     clr tr0
+007A D291               75     setb P1.1
+007C 015A               76     ajmp anfang
+                        77     RT:
+007E C28C               78     clr tr0
+0080 D292               79     setb P1.2
+0082 02003F             80     ljmp initGame
+                        81     ;---------------------------------------------
+                        82     ; timer ISR
+                        83     ;---------------------------------------------
+                        84     timer:
+0085 E530               85     mov a, 30h
+0087 700E               86     jnz vorcountdown
+                        87     ; Vorcountdown fertig, normale Stoppuhr
+0089 09                 88     inc r1
+008A B90206             89     cjne r1, #02h, nuranzeige
+008D 7900               90     mov r1, #00h
+008F 1200A6             91     call countup
+0092 22                 92     ret
+                        93     nuranzeige:
+0093 1200DC             94     call display
+0096 22                 95     ret
+                        96     ;---------------------------------------------
+                        97     ; vorcountdown: 100-Sek still runterzaehlen
+                        98     ;---------------------------------------------
+                        99     vorcountdown:
+0097 09                100     inc r1
+0098 B9020A            101     cjne r1, #02h, cdwait
+009B 7900              102     mov r1, #00h
+009D 1530              103     dec 30h
+009F E530              104     mov a, 30h
+00A1 7002              105     jnz cdwait
+00A3 C281              106     clr P0.1            ; Lampe AN
+                       107     cdwait:
+00A5 22                108     ret
+                       109     ;---------------------------------------------
+                       110     ; countup: Stoppuhr hochzaehlen
+                       111     ;---------------------------------------------
+                       112     countup:
+00A6 0E                113     inc r6
+00A7 BE3C0D            114     cjne r6, #3ch, sekunden
+00AA 7E00              115     mov r6, #00h
+00AC 0F                116     inc r7
+00AD BF6303            117     cjne r7, #63h, minuten
+                       118     hupe:
+00B0 C28C              119     clr tr0
+00B2 22                120     ret
+                       121     minuten:
+00B3 1200BB            122     call zeigen
+00B6 22                123     ret
+                       124     sekunden:
+00B7 1200BB            125     call zeigen
+00BA 22                126     ret
+                       127     ;-------------------------------------------------------
+                       128     ; zeigen
+                       129     ;-------------------------------------------------------
+                       130     zeigen:
+00BB 900300            131     mov DPTR, #table
+00BE EE                132     mov a, R6
+00BF 75F00A            133     mov b, #0ah
+00C2 84                134     div ab
+00C3 F8                135     mov R0, a
+00C4 93                136     movc a, @a+dptr
+00C5 FB                137     mov r3, a
+00C6 E8                138     mov a, r0
+00C7 C5F0              139     xch a, b
+00C9 93                140     movc a, @a+dptr
+00CA FA                141     mov r2, a
+00CB EF                142     mov a, R7
+00CC 75F00A            143     mov b, #0ah
+00CF 84                144     div ab
+00D0 F8                145     mov R0, a
+00D1 93                146     movc a, @a+dptr
+00D2 FD                147     mov r5, a
+00D3 E8                148     mov a, r0
+00D4 C5F0              149     xch a, b
+00D6 93                150     movc a, @a+dptr
+00D7 FC                151     mov r4, a
+00D8 1200DC            152     call display
+00DB 22                153     ret
+                       154     ;-----------------------------------------------
+                       155     ; display
                        156     ;-----------------------------------------------
-                       157     ;   DISPLAY: steuert die 4x7 Segmentanzeige
-                       158     ;-----------------------------------------------
-                       159     display:
-00A6 8AB0              160     mov P3, R2
-00A8 C2A0              161     clr P2.0
-00AA D2A0              162     setb P2.0
-                       163
-00AC 8BB0              164     mov P3, R3
-00AE C2A1              165     clr P2.1
-00B0 D2A1              166     setb P2.1
-                       167
-00B2 8CB0              168     mov P3, R4
-00B4 C2A2              169     clr P2.2
-00B6 D2A2              170     setb P2.2
-                       171
-00B8 8DB0              172     mov P3, R5
-00BA C2A3              173     clr P2.3
-00BC D2A3              174     setb P2.3
-                       175
-00BE 22                176     ret
-                       177     ;-------------------------------------------------
-                       178     ; TABLE: Datenbank der 7-Segment-Darstellung
-                       179     ;-------------------------------------------------
-                       180     org 300h
-                       181     table:
-0300 C0                182     db 11000000b
-0301 F9A4B0            183     db 11111001b, 10100100b, 10110000b
-0304 999282            184     db 10011001b, 10010010b, 10000010b
-0307 F88090            185     db 11111000b, 10000000b, 10010000b
-                       186
-                       187     end
-ASSEMBLY COMPLETE, NO ERRORS FOUND, 2 WARNINGS
+                       157     display:
+00DC 8AB0              158     mov P3, R2
+00DE C2A0              159     clr P2.0
+00E0 D2A0              160     setb P2.0
+00E2 8BB0              161     mov P3, R3
+00E4 C2A1              162     clr P2.1
+00E6 D2A1              163     setb P2.1
+00E8 8CB0              164     mov P3, R4
+00EA C2A2              165     clr P2.2
+00EC D2A2              166     setb P2.2
+00EE 8DB0              167     mov P3, R5
+00F0 C2A3              168     clr P2.3
+00F2 D2A3              169     setb P2.3
+00F4 22                170     ret
+                       171     ;-------------------------------------------------
+                       172     ; TABLE
+                       173     ;-------------------------------------------------
+                       174     org 300h
+                       175     table:
+0300 C0                176     db 11000000b
+0301 F9A4B0            177     db 11111001b, 10100100b, 10110000b
+0304 999282            178     db 10011001b, 10010010b, 10000010b
+0307 F88090            179     db 11111000b, 10000000b, 10010000b
+                       180     end
+ASSEMBLY COMPLETE, NO ERRORS FOUND, 1 WARNING
 
 
 ERROR SUMMARY:
-Line 25, WARNING:ThisORGhaslowervaluethanthepreviousone
-Line 60, WARNING:Reservedkeywordusedaslabel
+Line 64, WARNING:Reservedkeywordusedaslabel
 
 SYMBOL TABLE:
 ??MCU_8051_IDE . . . . . . . . . . .  N  NUMB  8051H  NOT USED
@@ -206,7 +197,7 @@ ADCLK. . . . . . . . . . . . . . . .  D  ADDR  00F2H  NOT USED
 ADCON. . . . . . . . . . . . . . . .  D  ADDR  00F3H  NOT USED
 ADDH . . . . . . . . . . . . . . . .  D  ADDR  00F5H  NOT USED
 ADDL . . . . . . . . . . . . . . . .  D  ADDR  00F4H  NOT USED
-ANFANG . . . . . . . . . . . . . . .  C  ADDR  0038H
+ANFANG . . . . . . . . . . . . . . .  C  ADDR  005AH
 AUXR . . . . . . . . . . . . . . . .  D  ADDR  008EH  NOT USED
 AUXR1. . . . . . . . . . . . . . . .  D  ADDR  00A2H  NOT USED
 B. . . . . . . . . . . . . . . . . .  D  ADDR  00F0H
@@ -237,6 +228,7 @@ CCF2 . . . . . . . . . . . . . . . .  B  ADDR  00DAH  NOT USED
 CCF3 . . . . . . . . . . . . . . . .  B  ADDR  00DBH  NOT USED
 CCF4 . . . . . . . . . . . . . . . .  B  ADDR  00DCH  NOT USED
 CCON . . . . . . . . . . . . . . . .  D  ADDR  00D8H  NOT USED
+CDWAIT . . . . . . . . . . . . . . .  C  ADDR  00A5H
 CFINT. . . . . . . . . . . . . . . .  C  ADDR  0033H  NOT USED
 CH . . . . . . . . . . . . . . . . .  D  ADDR  00F9H  NOT USED
 CKCON. . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
@@ -246,13 +238,13 @@ CKSEL. . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
 CL . . . . . . . . . . . . . . . . .  D  ADDR  00E9H  NOT USED
 CLKREG . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
 CMOD . . . . . . . . . . . . . . . .  D  ADDR  00D9H  NOT USED
-COUNTUP. . . . . . . . . . . . . . .  C  ADDR  006FH
+COUNTUP. . . . . . . . . . . . . . .  C  ADDR  00A6H
 CPRL2. . . . . . . . . . . . . . . .  B  ADDR  00C8H  NOT USED
 CR . . . . . . . . . . . . . . . . .  B  ADDR  00DEH  NOT USED
 CT2. . . . . . . . . . . . . . . . .  B  ADDR  00C9H  NOT USED
 CY . . . . . . . . . . . . . . . . .  B  ADDR  00D7H  NOT USED
-DA . . . . . . . . . . . . . . . . .  C  ADDR  0046H
-DISPLAY. . . . . . . . . . . . . . .  C  ADDR  00A6H
+DA . . . . . . . . . . . . . . . . .  C  ADDR  006AH
+DISPLAY. . . . . . . . . . . . . . .  C  ADDR  00DCH
 DP0H . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
 DP0L . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
 DP1H . . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
@@ -274,11 +266,12 @@ EXTI0. . . . . . . . . . . . . . . .  C  ADDR  0003H  NOT USED
 EXTI1. . . . . . . . . . . . . . . .  C  ADDR  0013H  NOT USED
 F0 . . . . . . . . . . . . . . . . .  B  ADDR  00D5H  NOT USED
 FE . . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
-HUPE . . . . . . . . . . . . . . . .  C  ADDR  0078H  NOT USED
+HUPE . . . . . . . . . . . . . . . .  C  ADDR  00B0H  NOT USED
 IE . . . . . . . . . . . . . . . . .  D  ADDR  00A8H
 IE0. . . . . . . . . . . . . . . . .  B  ADDR  0089H  NOT USED
 IE1. . . . . . . . . . . . . . . . .  B  ADDR  008BH  NOT USED
 INIT . . . . . . . . . . . . . . . .  C  ADDR  0020H
+INITGAME . . . . . . . . . . . . . .  C  ADDR  003FH
 INT0 . . . . . . . . . . . . . . . .  B  ADDR  00B2H  NOT USED
 INT1 . . . . . . . . . . . . . . . .  B  ADDR  00B3H  NOT USED
 IP . . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
@@ -292,9 +285,9 @@ IT1. . . . . . . . . . . . . . . . .  B  ADDR  008AH  NOT USED
 KBE. . . . . . . . . . . . . . . . .  D  ADDR  009DH  NOT USED
 KBF. . . . . . . . . . . . . . . . .  D  ADDR  009EH  NOT USED
 KBLS . . . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
-MINUTEN. . . . . . . . . . . . . . .  C  ADDR  007DH
-NURANZEIGE . . . . . . . . . . . . .  C  ADDR  006BH
-NURRT. . . . . . . . . . . . . . . .  C  ADDR  003EH
+MINUTEN. . . . . . . . . . . . . . .  C  ADDR  00B3H
+NURANZEIGE . . . . . . . . . . . . .  C  ADDR  0093H
+NURRT. . . . . . . . . . . . . . . .  C  ADDR  0062H  NOT USED
 OSCCON . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
 OV . . . . . . . . . . . . . . . . .  B  ADDR  00D2H  NOT USED
 P. . . . . . . . . . . . . . . . . .  B  ADDR  00D0H  NOT USED
@@ -336,7 +329,7 @@ RESET. . . . . . . . . . . . . . . .  C  ADDR  0000H  NOT USED
 RI . . . . . . . . . . . . . . . . .  B  ADDR  0098H  NOT USED
 RS0. . . . . . . . . . . . . . . . .  B  ADDR  00D3H  NOT USED
 RS1. . . . . . . . . . . . . . . . .  B  ADDR  00D4H  NOT USED
-RT . . . . . . . . . . . . . . . . .  C  ADDR  005AH
+RT . . . . . . . . . . . . . . . . .  C  ADDR  007EH
 RXD. . . . . . . . . . . . . . . . .  B  ADDR  00B0H  NOT USED
 SADDR. . . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
 SADDR_0. . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
@@ -346,7 +339,7 @@ SADEN_0. . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
 SADEN_1. . . . . . . . . . . . . . .  D  ADDR  00BAH  NOT USED
 SBUF . . . . . . . . . . . . . . . .  D  ADDR  0099H  NOT USED
 SCON . . . . . . . . . . . . . . . .  D  ADDR  0098H  NOT USED
-SEKUNDEN . . . . . . . . . . . . . .  C  ADDR  0081H
+SEKUNDEN . . . . . . . . . . . . . .  C  ADDR  00B7H
 SINT . . . . . . . . . . . . . . . .  C  ADDR  0023H  NOT USED
 SM0. . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
 SM1. . . . . . . . . . . . . . . . .  B  ADDR  009EH  NOT USED
@@ -358,8 +351,8 @@ SPDAT. . . . . . . . . . . . . . . .  D  ADDR  00C5H  NOT USED
 SPDR . . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
 SPSR . . . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
 SPSTA. . . . . . . . . . . . . . . .  D  ADDR  00C4H  NOT USED
-STARTTIMER . . . . . . . . . . . . .  C  ADDR  004EH
-STOPTIMER. . . . . . . . . . . . . .  C  ADDR  0054H
+STARTTIMER . . . . . . . . . . . . .  C  ADDR  0072H
+STOPTIMER. . . . . . . . . . . . . .  C  ADDR  0078H
 T0 . . . . . . . . . . . . . . . . .  B  ADDR  00B4H  NOT USED
 T1 . . . . . . . . . . . . . . . . .  B  ADDR  00B5H  NOT USED
 T2CON. . . . . . . . . . . . . . . .  D  ADDR  00C8H  NOT USED
@@ -375,7 +368,7 @@ TH0. . . . . . . . . . . . . . . . .  D  ADDR  008CH
 TH1. . . . . . . . . . . . . . . . .  D  ADDR  008DH  NOT USED
 TH2. . . . . . . . . . . . . . . . .  D  ADDR  00CDH  NOT USED
 TI . . . . . . . . . . . . . . . . .  B  ADDR  0099H  NOT USED
-TIMER. . . . . . . . . . . . . . . .  C  ADDR  0061H
+TIMER. . . . . . . . . . . . . . . .  C  ADDR  0085H
 TIMER0 . . . . . . . . . . . . . . .  C  ADDR  000BH  NOT USED
 TIMER1 . . . . . . . . . . . . . . .  C  ADDR  001BH  NOT USED
 TIMER2 . . . . . . . . . . . . . . .  C  ADDR  002BH  NOT USED
@@ -387,8 +380,9 @@ TR0. . . . . . . . . . . . . . . . .  B  ADDR  008CH
 TR1. . . . . . . . . . . . . . . . .  B  ADDR  008EH  NOT USED
 TR2. . . . . . . . . . . . . . . . .  B  ADDR  00CAH  NOT USED
 TXD. . . . . . . . . . . . . . . . .  B  ADDR  00B1H  NOT USED
+VORCOUNTDOWN . . . . . . . . . . . .  C  ADDR  0097H
 WDTCON . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
 WDTPRG . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
 WDTRST . . . . . . . . . . . . . . .  D  ADDR  00A6H  NOT USED
 WR . . . . . . . . . . . . . . . . .  B  ADDR  00B6H  NOT USED
-ZEIGEN . . . . . . . . . . . . . . .  C  ADDR  0085H
+ZEIGEN . . . . . . . . . . . . . . .  C  ADDR  00BBH
